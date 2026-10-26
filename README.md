@@ -242,9 +242,3 @@ Con GitHub CLI:
 gh repo create LUNA_IA --private --source=. --remote=origin --push
 ```
 
-## Notas de seguridad
-
-- `backend/.env` está en `.gitignore`: **nunca** subir secretos ni credenciales reales.
-- No hay registro público: los usuarios se crean por invitación desde el panel de administración.
-- El 2FA TOTP es obligatorio para los roles `admin` y `doctor`.
-- Las reglas de negocio y permisos se validan en Django, no en el prompt del LLM.
