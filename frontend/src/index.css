@@ -1,0 +1,109 @@
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Menú lateral con la sombra teal de la referencia visual */
+.sider-luna {
+  box-shadow: rgba(35, 135, 130, 0.25) 0 0 20px;
+  z-index: 2;
+}
+
+/* Encabezado siempre encima del menú flotante, para que el botón de tres líneas siga visible */
+.encabezado {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+  padding: 0 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #dde2ee;
+}
+
+/* Botón de menú, logo y nombre: misma altura y centrados entre sí */
+.marca-encabezado {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 100%;
+}
+
+.boton-menu {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.logo-encabezado {
+  display: block;
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 10px;
+}
+
+.nombre-marca {
+  display: inline-flex;
+  align-items: center;
+  font-size: 16px;
+  line-height: 1;
+  letter-spacing: 0.5px;
+  color: #238781;
+}
+
+.usuario-menu {
+  cursor: pointer;
+}
+
+.contenido {
+  padding: 24px;
+}
+
+.login-fondo {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #f4f8f8;
+}
+
+.login-tarjeta {
+  width: 400px;
+  max-width: 100%;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.marca-login {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.qr-caja {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+  margin-bottom: 12px;
+  background: #ffffff;
+  border: 1px solid #dde2ee;
+  border-radius: 8px;
+}
+
+.clave-manual {
+  font-family: monospace;
+  word-break: break-all;
+  text-align: center;
+}
+
+.codigos {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
