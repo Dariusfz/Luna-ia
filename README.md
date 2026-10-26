@@ -193,12 +193,6 @@ npm run lint
 npm run build
 ```
 
-## Compartir la base de datos de desarrollo
-
-La base de datos vive en el volumen Docker `luna-ia-dev_pg_data` de cada máquina.
-Para que otra persona vea los mismos datos, exporta un respaldo y compártelo por un
-canal privado (Drive, OneDrive, WhatsApp). **No subas el respaldo a GitHub.**
-
 Exportar en la máquina de origen:
 
 ```powershell
@@ -230,23 +224,6 @@ python manage.py changepassword <usuario>
 Si prefieres conservar el 2FA existente, comparte también `TOTP_ENCRYPTION_KEY` de
 `backend/.env` por el mismo canal privado.
 
-### Alternativa: copiar el volumen completo (no recomendado)
-
-Solo funciona con la misma versión de PostgreSQL (16) y con el contenedor detenido.
-
-```powershell
-# Exportar
-docker compose -f infra/docker-compose.dev.yml stop postgres
-docker run --rm --mount type=bind,source="${PWD}\backups",target=/backup --mount type=volume,source=luna-ia-dev_pg_data,target=/data alpine sh -c "cd /data && tar czf /backup/pg_data.tar.gz ."
-docker compose -f infra/docker-compose.dev.yml start postgres
-
-# Importar (borra el volumen actual)
-docker compose -f infra/docker-compose.dev.yml down
-docker volume rm luna-ia-dev_pg_data
-docker volume create luna-ia-dev_pg_data
-docker run --rm --mount type=bind,source="${PWD}\backups",target=/backup --mount type=volume,source=luna-ia-dev_pg_data,target=/data alpine sh -c "cd /data && tar xzf /backup/pg_data.tar.gz"
-docker compose -f infra/docker-compose.dev.yml up -d
-```
 
 ## Publicar en GitHub
 
