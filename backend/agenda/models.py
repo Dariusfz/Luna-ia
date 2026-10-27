@@ -116,3 +116,73 @@ class JornadaExterna(models.Model):
 
     def __str__(self):
         return f"{self.fecha} - {self.lugar} ({self.hora_inicio}-{self.hora_fin})"
+
+
+class ListaEspera(models.Model):
+    """
+    Paciente que espera un cupo en una sede. Puede convertirse en cita con la
+    acción `agendar`, que crea la Atencion y deja el enlace guardado.
+    """
+
+    class Prioridad(models.IntegerChoices):
+        BAJA = 1, "Baja"
+        NORMAL = 2, "Normal"
+        ALTA = 3, "Alta"
+
+    class Estado(models.TextChoices):
+        ESPERANDO = "esperando", "En espera"
+        CONTACTADO = "contactado", "Contactado"
+        AGENDADO = "agendado", "Agendado"
+        CANCELADO = "cancelado", "Cancelado"
+
+    sede = models.ForeignKey(
+        "sedes.Sede", on_delete=models.PROTECT, related_name="lista_espera"
+    )
+    paciente = models.ForeignKey(
+        "pacientes.Paciente", on_delete=models.PROTECT, related_name="lista_espera"
+    )
+    doctor = models.ForeignKey(
+        "users.Doctor",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="lista_espera",
+        help_text="Doctor preferido por el paciente (opcional).",
+    )
+    tipo_trabajo = models.ForeignKey(
+        "servicios.TipoTrabajo",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="lista_espera",
+        help_text="Trabajo que necesita el paciente (opcional).",
+    )
+    prioridad = models.PositiveSmallIntegerField(
+        choices=Prioridad.choices, default=Prioridad.NORMAL
+    )
+    estado = models.CharField(
+        max_length=20, choices=Estado.choices, default=Estado.ESPERANDO
+    )
+    fecha_deseada = models.DateField(
+        null=True, blank=True, help_text="Fecha aproximada en la que quiere atenderse."
+    )
+    motivo = models.CharField(max_length=255, blank=True)
+    atencion = models.OneToOneField(
+        Atencion,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="lista_espera",
+        help_text="Cita creada cuando se agenda esta espera.",
+    )
+    creada = models.DateTimeField(auto_now_add=True)
+    actualizada = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-prioridad", "creada"]
+        verbose_name = "lista de espera"
+        verbose_name_plural = "lista de espera"
+        indexes = [models.Index(fields=["sede", "estado"])]
+
+    def __str__(self):
+        return f"{self.paciente} - {self.sede} ({self.get_estado_display()})"

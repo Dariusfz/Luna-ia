@@ -1,6 +1,7 @@
-﻿from datetime import date, time
+﻿from datetime import date, time, timedelta
 
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -114,7 +115,8 @@ class DoctoresAPITests(TestCase):
         tipo = TipoTrabajo.objects.get_or_create(nombre="Limpieza")[0]
         return {
             "sede": sede.pk, "doctor": doctor.pk, "paciente": paciente.pk,
-            "tipo_trabajo": tipo.pk, "fecha": "2026-10-22",
+            "tipo_trabajo": tipo.pk,
+            "fecha": (timezone.localdate() + timedelta(days=30)).isoformat(),
             "hora_inicio": "09:00", "hora_fin": "10:00", "honorario_doctor": "300",
         }
 

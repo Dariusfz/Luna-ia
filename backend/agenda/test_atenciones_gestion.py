@@ -40,7 +40,7 @@ class AtencionesGestionTests(TestCase):
             "doctor": self.luis.pk,
             "paciente": self.paciente.pk,
             "tipo_trabajo": self.tipo.pk,
-            "fecha": "2026-10-22",
+            "fecha": (timezone.localdate() + timedelta(days=30)).isoformat(),
             "hora_inicio": "09:00",
             "hora_fin": "10:00",
             "honorario_doctor": "300",
@@ -124,11 +124,13 @@ class AtencionesGestionTests(TestCase):
         self.assertEqual(ids("/api/atenciones/?hasta=2026-10-21"), {mia.pk})
 
     def test_no_permite_completar_una_cita_futura(self):
-        futura = (timezone.localdate() + timedelta(days=1)).isoformat()
-        respuesta = self.recep_api.post(
-            "/api/atenciones/",
-            self._datos(fecha=futura, estado="completada"),
-            format="json",
+        futura = timezone.localdate() + timedelta(days=1)
+        atencion = Atencion.objects.create(
+            sede=self.sede_a, doctor=self.luis, paciente=self.paciente, tipo_trabajo=self.tipo,
+            fecha=futura, hora_inicio=time(9), hora_fin=time(10), honorario_doctor=0,
+        )
+        respuesta = self.recep_api.patch(
+            f"/api/atenciones/{atencion.pk}/", {"estado": "completada"}, format="json"
         )
         self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("estado", respuesta.json())

@@ -4,9 +4,9 @@ from django.views.generic import RedirectView
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 
-from agenda.views import AtencionViewSet, JornadaExternaViewSet
+from agenda.views import AtencionViewSet, JornadaExternaViewSet, ListaEsperaViewSet
 from pacientes.views import PacienteViewSet
-from sedes.views import LugarExternoViewSet, SedeViewSet
+from sedes.views import FeriadoViewSet, HorarioSedeViewSet, LugarExternoViewSet, SedeViewSet
 from servicios.views import EspecialidadViewSet, TipoTrabajoViewSet
 from users.views import (
     AceptarInvitacionView,
@@ -30,8 +30,11 @@ router.register("usuarios", UsuarioViewSet, basename="usuario")
 router.register("doctores", DoctorViewSet, basename="doctor")
 router.register("pacientes", PacienteViewSet, basename="paciente")
 router.register("atenciones", AtencionViewSet, basename="atencion")
+router.register("lista-espera", ListaEsperaViewSet, basename="lista-espera")
 router.register("jornadas-externas", JornadaExternaViewSet, basename="jornada-externa")
 router.register("sedes", SedeViewSet, basename="sede")
+router.register("horarios-sede", HorarioSedeViewSet, basename="horario-sede")
+router.register("feriados", FeriadoViewSet, basename="feriado")
 router.register("lugares-externos", LugarExternoViewSet, basename="lugar-externo")
 router.register("tipos-trabajo", TipoTrabajoViewSet, basename="tipo-trabajo")
 router.register("especialidades", EspecialidadViewSet, basename="especialidad")
