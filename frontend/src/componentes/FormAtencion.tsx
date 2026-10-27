@@ -1,8 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Form, Input, InputNumber, Modal, Select, message } from 'antd'
+import { Alert, Form, Input, InputNumber, Modal, Select, message } from 'antd'
 import { useEffect, useState } from 'react'
 
-import { actualizarAtencion, crearAtencion, type Atencion, type DatosAtencion } from '../api/atenciones'
+import {
+  actualizarAtencion,
+  consultarDisponibilidad,
+  crearAtencion,
+  type Atencion,
+  type DatosAtencion,
+} from '../api/atenciones'
 import { ApiError } from '../api/cliente'
 import { listarDoctores } from '../api/catalogos'
 import { listarPacientes, listarSedes } from '../api/recursos'
@@ -29,8 +35,20 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
   const cliente = useQueryClient()
   const editando = atencion !== null
 
+  const [fechaMinima] = useState(() => {
+    const hoy = new Date()
+    const mes = String(hoy.getMonth() + 1).padStart(2, '0')
+    const dia = String(hoy.getDate()).padStart(2, '0')
+    return `${hoy.getFullYear()}-${mes}-${dia}`
+  })
+
   const sedeElegida = Form.useWatch('sede', form)
+  const doctorElegido = Form.useWatch('doctor', form)
+  const fechaElegida = Form.useWatch('fecha', form)
+  const horaInicio = Form.useWatch('hora_inicio', form)
+  const horaFin = Form.useWatch('hora_fin', form)
   const estadoActual = Form.useWatch('estado', form)
+  const rangoValido = !!horaInicio && !!horaFin && horaFin > horaInicio
   const [busqueda, setBusqueda] = useState('')
   const [nombres, setNombres] = useState<Record<number, string>>({})
 
@@ -46,6 +64,83 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
     enabled: abierto,
   })
   const { data: tipos } = useQuery({ queryKey: ['tipos-trabajo', 'true'], queryFn: () => listarTiposTrabajo('true') })
+  const { data: disponibilidad } = useQuery({
+    queryKey: [
+      'disponibilidad',
+      sedeElegida,
+      doctorElegido,
+      fechaElegida,
+      horaInicio,
+      horaFin,
+    ],
+    queryFn: () =>
+      consultarDisponibilidad({
+        sede: sedeElegida!,
+        doctor: doctorElegido!,
+        fecha: fechaElegida!,
+        ...(rangoValido
+          ? { hora_inicio: horaInicio!, hora_fin: horaFin! }
+          : {}),
+      }),
+    enabled: abierto && !!sedeElegida && !!doctorElegido && !!fechaElegida,
+  })
+
+  // La cita que se está editando no debe contarse como ocupada.
+  const ocupados = (disponibilidad?.doctores[0]?.ocupados ?? []).filter(
+    (intervalo) => intervalo.atencion !== atencion?.id,
+  )
+  const horarioOcupado =
+    !!horaInicio &&
+    !!horaFin &&
+    horaFin > horaInicio &&
+    ocupados.some(
+      (intervalo) => horaInicio < intervalo.hora_fin && horaFin > intervalo.hora_inicio,
+    )
+
+  const huecos = disponibilidad?.doctores[0]?.huecos ?? []
+  const cerrada = disponibilidad?.abierta === false
+  const sinHorario = disponibilidad?.horario_configurado === false
+  const fueraDeHorario =
+    rangoValido &&
+    disponibilidad?.doctores[0]?.disponible === false &&
+    !horarioOcupado &&
+    !cerrada
+  const tipoAviso: 'error' | 'warning' | 'info' =
+    cerrada || horarioOcupado || fueraDeHorario ? 'error' : sinHorario ? 'warning' : 'info'
+  const mensajeAviso = cerrada
+    ? (disponibilidad?.motivo ?? 'La sede no abre ese día')
+    : horarioOcupado
+      ? 'Ese horario ya está ocupado'
+      : fueraDeHorario
+        ? 'El horario está fuera de la atención de la sede'
+        : sinHorario
+          ? 'La sede no tiene horario configurado'
+          : 'Disponibilidad del doctor'
+  const franjas = (disponibilidad?.abiertos ?? [])
+    .map((intervalo) => `${intervalo.hora_inicio}–${intervalo.hora_fin}`)
+    .join(' · ')
+  const franjasConfiguradas = (disponibilidad?.horarios ?? [])
+    .map((intervalo) => `${intervalo.hora_inicio}–${intervalo.hora_fin}`)
+    .join(' · ')
+  const descripcionAviso = sinHorario
+    ? 'Puedes agendar a cualquier hora; configura los horarios en Configuración.'
+    : cerrada
+      ? franjasConfiguradas
+        ? `Horario habitual: ${franjasConfiguradas}`
+        : undefined
+      : [
+          franjas ? `Horario: ${franjas}` : null,
+          ocupados.length > 0
+            ? `Ocupados: ${ocupados
+                .map((intervalo) => `${intervalo.hora_inicio}–${intervalo.hora_fin}`)
+                .join(', ')}`
+            : null,
+          huecos.length > 0
+            ? `Libres: ${huecos.slice(0, 12).join(', ')}${huecos.length > 12 ? '…' : ''}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' · ') || undefined
 
   useEffect(() => {
     if (!abierto) return
@@ -95,6 +190,7 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
     onSuccess: () => {
       message.success(editando ? 'Cita actualizada' : 'Cita creada')
       cliente.invalidateQueries({ queryKey: ['atenciones'] })
+      cliente.invalidateQueries({ queryKey: ['disponibilidad'] })
       onCerrar()
     },
     onError: (e) => {
@@ -110,7 +206,7 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
   function enviar(valores: Valores) {
     guardar.mutate({
       ...valores,
-      estado: valores.estado ?? 'pendiente',
+      estado: editando ? (valores.estado ?? 'pendiente') : 'pendiente',
       procedimiento: valores.procedimiento ?? '',
       observaciones: valores.observaciones ?? '',
       honorario_doctor: valores.honorario_doctor ?? 0,
@@ -159,11 +255,21 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
               options={tipos?.results.map((t) => ({ value: t.id, label: t.nombre }))}
             />
           </Form.Item>
-          <Form.Item name="estado" label="Estado" rules={[{ required: true, message: 'Elige el estado' }]}>
-            <Select options={ESTADOS_ATENCION.map((e) => ({ value: e, label: ETIQUETA_ESTADO[e] }))} />
-          </Form.Item>
+          {editando ? (
+            <Form.Item name="estado" label="Estado" rules={[{ required: true, message: 'Elige el estado' }]}>
+              <Select options={ESTADOS_ATENCION.map((e) => ({ value: e, label: ETIQUETA_ESTADO[e] }))} />
+            </Form.Item>
+          ) : (
+            <Form.Item label="Estado">
+              <Select
+                value="pendiente"
+                disabled
+                options={[{ value: 'pendiente', label: ETIQUETA_ESTADO.pendiente }]}
+              />
+            </Form.Item>
+          )}
           <Form.Item name="fecha" label="Fecha" rules={[{ required: true, message: 'Elige la fecha' }]}>
-            <Input type="date" />
+            <Input type="date" min={editando ? undefined : fechaMinima} />
           </Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
             <Form.Item name="hora_inicio" label="Hora inicio" rules={[{ required: true, message: 'Requerida' }]}>
@@ -173,6 +279,15 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
               <Input type="time" />
             </Form.Item>
           </div>
+          {disponibilidad && (
+            <Alert
+              style={{ gridColumn: '1 / -1' }}
+              type={tipoAviso}
+              showIcon
+              message={mensajeAviso}
+              description={descripcionAviso}
+            />
+          )}
           <Form.Item
             name="honorario_doctor"
             label="Honorario pagado al doctor (HNL)"
