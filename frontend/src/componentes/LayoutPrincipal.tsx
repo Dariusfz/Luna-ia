@@ -3,10 +3,12 @@ import {
   CalendarOutlined,
   ExperimentOutlined,
   HomeOutlined,
+  HourglassOutlined,
   IdcardOutlined,
   LogoutOutlined,
   MedicineBoxOutlined,
   MenuOutlined,
+  SettingOutlined,
   TagsOutlined,
   TeamOutlined,
   UserOutlined,
@@ -27,6 +29,7 @@ const itemsBase: NonNullable<MenuProps['items']> = [
   { key: '/', icon: <HomeOutlined />, label: 'Inicio' },
   { key: '/pacientes', icon: <TeamOutlined />, label: 'Pacientes' },
   { key: '/atenciones', icon: <CalendarOutlined />, label: 'Atenciones' },
+  { key: '/lista-espera', icon: <HourglassOutlined />, label: 'Lista de espera' },
   { key: '/doctores', icon: <MedicineBoxOutlined />, label: 'Doctores' },
   { key: '/especialidades', icon: <ExperimentOutlined />, label: 'Especialidades' },
   { key: '/tipos-trabajo', icon: <TagsOutlined />, label: 'Tipos de trabajo' },
@@ -34,6 +37,7 @@ const itemsBase: NonNullable<MenuProps['items']> = [
 
 const itemsAdmin: NonNullable<MenuProps['items']> = [
   { key: '/sedes', icon: <BankOutlined />, label: 'Sedes' },
+  { key: '/configuracion', icon: <SettingOutlined />, label: 'Configuración' },
   { key: '/personal', icon: <IdcardOutlined />, label: 'Personal' },
 ]
 

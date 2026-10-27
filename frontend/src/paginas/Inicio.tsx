@@ -2,6 +2,7 @@ import {
   CalendarOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  HourglassOutlined,
   MedicineBoxOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
@@ -13,6 +14,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { listarAtenciones, type Atencion } from '../api/atenciones'
 import { obtenerUsuarioActual } from '../api/auth'
+import { listarListaEspera } from '../api/listaEspera'
 import { listarPacientes, listarSedes } from '../api/recursos'
 import { COLOR_ESTADO, ETIQUETA_ESTADO, type EstadoAtencion } from '../constantes/atenciones'
 
@@ -71,6 +73,11 @@ export default function Inicio() {
   const { data: pacientes } = useQuery({
     queryKey: ['pacientes', 'resumen'],
     queryFn: () => listarPacientes(1, { activo: 'true' }),
+  })
+
+  const { data: enEspera, isPending: cargandoEspera } = useQuery({
+    queryKey: ['lista-espera', 'resumen'],
+    queryFn: () => listarListaEspera(1, { estado: ['esperando', 'contactado'] }),
   })
 
   const { data: sedes } = useQuery({
@@ -132,7 +139,7 @@ export default function Inicio() {
       </div>
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} xl={6}>
+        <Col xs={24} sm={12} xl={8}>
           <Card>
             <Statistic
               title="Citas y atenciones de hoy"
@@ -142,7 +149,7 @@ export default function Inicio() {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} xl={6}>
+        <Col xs={24} sm={12} xl={8}>
           <Card>
             <Statistic
               title="Completadas hoy"
@@ -152,7 +159,7 @@ export default function Inicio() {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} xl={6}>
+        <Col xs={24} sm={12} xl={8}>
           <Card>
             <Statistic
               title="Citas pendientes (7 días)"
@@ -161,12 +168,22 @@ export default function Inicio() {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} xl={6}>
+        <Col xs={24} sm={12} xl={8}>
           <Card>
             <Statistic
               title="Pacientes activos"
               value={pacientes ? pacientes.count : '—'}
               prefix={<TeamOutlined />}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} xl={8}>
+          <Card>
+            <Statistic
+              title="En lista de espera"
+              value={enEspera ? enEspera.count : '—'}
+              prefix={<HourglassOutlined />}
+              loading={cargandoEspera}
             />
           </Card>
         </Col>
@@ -198,6 +215,9 @@ export default function Inicio() {
             <Space direction="vertical" style={{ width: '100%' }}>
               <Button block icon={<CalendarOutlined />} onClick={() => navegar('/atenciones')}>
                 Nueva cita
+              </Button>
+              <Button block icon={<HourglassOutlined />} onClick={() => navegar('/lista-espera')}>
+                Lista de espera
               </Button>
               <Button block icon={<TeamOutlined />} onClick={() => navegar('/pacientes')}>
                 Pacientes

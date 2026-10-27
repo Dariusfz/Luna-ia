@@ -4,10 +4,12 @@ import LayoutPrincipal from './componentes/LayoutPrincipal'
 import RequiereSesion from './componentes/RequiereSesion'
 import AceptarInvitacion from './paginas/AceptarInvitacion'
 import Atenciones from './paginas/Atenciones'
+import Configuracion from './paginas/Configuracion'
 import ConfirmarRecuperacion from './paginas/ConfirmarRecuperacion'
 import Doctores from './paginas/Doctores'
 import Especialidades from './paginas/Especialidades'
 import Inicio from './paginas/Inicio'
+import ListaEspera from './paginas/ListaEspera'
 import Login from './paginas/Login'
 import Pacientes from './paginas/Pacientes'
 import Personal from './paginas/Personal'
@@ -27,11 +29,13 @@ export default function App() {
           <Route index element={<Inicio />} />
           <Route path="pacientes" element={<Pacientes />} />
           <Route path="atenciones" element={<Atenciones />} />
+          <Route path="lista-espera" element={<ListaEspera />} />
           <Route path="personal" element={<Personal />} />
           <Route path="doctores" element={<Doctores />} />
           <Route path="especialidades" element={<Especialidades />} />
           <Route path="tipos-trabajo" element={<TiposTrabajo />} />
           <Route path="sedes" element={<Sedes />} />
+          <Route path="configuracion" element={<Configuracion />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
