@@ -78,10 +78,10 @@ class DoctorSerializer(serializers.ModelSerializer):
     usuario = serializers.PrimaryKeyRelatedField(
         queryset=Usuario.objects.all(), required=False, allow_null=True
     )
-    especialidad = serializers.PrimaryKeyRelatedField(
-        queryset=Especialidad.objects.filter(activo=True), required=False, allow_null=True
+    especialidades = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=Especialidad.objects.filter(activo=True), required=False
     )
-    especialidad_nombre = serializers.SerializerMethodField()
+    especialidades_nombres = serializers.SerializerMethodField()
 
     class Meta:
         model = Doctor
@@ -91,8 +91,8 @@ class DoctorSerializer(serializers.ModelSerializer):
             "tipo",
             "nombres",
             "apellidos",
-            "especialidad",
-            "especialidad_nombre",
+            "especialidades",
+            "especialidades_nombres",
             "numero_colegiado",
             "telefono",
             "activo",
@@ -105,8 +105,8 @@ class DoctorSerializer(serializers.ModelSerializer):
     # Campos administrativos: solo los ve el admin.
     CAMPOS_SOLO_ADMIN = ("usuario", "observaciones")
 
-    def get_especialidad_nombre(self, obj) -> str | None:
-        return obj.especialidad.nombre if obj.especialidad_id else None
+    def get_especialidades_nombres(self, obj) -> list[str]:
+        return [especialidad.nombre for especialidad in obj.especialidades.all()]
 
     def validate_telefono(self, valor):
         try:

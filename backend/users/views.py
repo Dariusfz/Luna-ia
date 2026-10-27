@@ -274,7 +274,9 @@ class DoctorViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "put", "patch", "head", "options"]
 
     def get_queryset(self):
-        qs = Doctor.objects.select_related("usuario", "especialidad").prefetch_related("sedes")
+        qs = Doctor.objects.select_related("usuario").prefetch_related(
+            "especialidades", "sedes"
+        )
         user = self.request.user
         if not es_admin(user):
             qs = qs.filter(sedes__in=user.sedes.all()).distinct()
@@ -287,7 +289,7 @@ class DoctorViewSet(viewsets.ModelViewSet):
             qs = qs.filter(
                 Q(nombres__icontains=texto)
                 | Q(apellidos__icontains=texto)
-                | Q(especialidad__nombre__icontains=texto)
+                | Q(especialidades__nombre__icontains=texto)
             )
         tipo = params.get("tipo", "")
         if tipo in Doctor.Tipo.values:

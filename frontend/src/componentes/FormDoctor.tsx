@@ -38,7 +38,7 @@ export default function FormDoctor({ abierto, doctor, onCerrar }: Props) {
         tipo: doctor.tipo,
         nombres: doctor.nombres,
         apellidos: doctor.apellidos,
-        especialidad: doctor.especialidad,
+        especialidades: doctor.especialidades,
         numero_colegiado: doctor.numero_colegiado,
         telefono: doctor.telefono,
         activo: doctor.activo,
@@ -47,7 +47,7 @@ export default function FormDoctor({ abierto, doctor, onCerrar }: Props) {
       })
     } else {
       form.resetFields()
-      form.setFieldsValue({ tipo: 'contratado', sedes: [], activo: true })
+      form.setFieldsValue({ tipo: 'contratado', sedes: [], especialidades: [], activo: true })
     }
   }, [abierto, doctor, form])
 
@@ -96,10 +96,15 @@ export default function FormDoctor({ abierto, doctor, onCerrar }: Props) {
               ]}
             />
           </Form.Item>
-          <Form.Item name="especialidad" label="Especialidad">
+          <Form.Item name="especialidades" label="Especialidades">
             <Select
+              mode="multiple"
               allowClear
-              placeholder={especialidades?.results.length ? 'Elige una especialidad' : 'No hay especialidades activas'}
+              placeholder={
+                especialidades?.results.length
+                  ? 'Elige una o más especialidades'
+                  : 'No hay especialidades activas'
+              }
               options={especialidades?.results.map((e) => ({ value: e.id, label: e.nombre }))}
             />
           </Form.Item>

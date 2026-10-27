@@ -32,8 +32,8 @@ export type Doctor = {
   tipo: TipoDoctor
   nombres: string
   apellidos: string
-  especialidad: number | null
-  especialidad_nombre: string | null
+  especialidades: number[]
+  especialidades_nombres: string[]
   numero_colegiado: string
   telefono: string
   activo: boolean
@@ -66,7 +66,7 @@ export type DatosDoctor = {
   tipo: TipoDoctor
   nombres: string
   apellidos: string
-  especialidad?: number | null
+  especialidades?: number[]
   numero_colegiado?: string
   telefono?: string
   activo?: boolean

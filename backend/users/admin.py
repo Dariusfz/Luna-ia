@@ -13,7 +13,7 @@ class UsuarioAdmin(UserAdmin):
 
 @admin.register(Doctor)
 class DoctorAdmin(admin.ModelAdmin):
-    list_display = ("apellidos", "nombres", "tipo", "especialidad", "activo")
-    list_filter = ("tipo", "activo")
-    search_fields = ("nombres", "apellidos", "numero_colegiado")
-    filter_horizontal = ("sedes",)
+    list_display = ("apellidos", "nombres", "tipo", "activo")
+    list_filter = ("tipo", "activo", "especialidades")
+    search_fields = ("nombres", "apellidos", "numero_colegiado", "especialidades__nombre")
+    filter_horizontal = ("sedes", "especialidades")

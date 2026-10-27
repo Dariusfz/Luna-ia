@@ -141,11 +141,9 @@ class Doctor(models.Model):
     tipo = models.CharField(max_length=12, choices=Tipo.choices)
     nombres = models.CharField(max_length=100)
     apellidos = models.CharField(max_length=100)
-    especialidad = models.ForeignKey(
+    especialidades = models.ManyToManyField(
         "servicios.Especialidad",
-        null=True,
         blank=True,
-        on_delete=models.PROTECT,
         related_name="doctores",
     )
     numero_colegiado = models.CharField(max_length=30, blank=True)

@@ -64,10 +64,11 @@ export default function Doctores() {
     { title: 'Nombre', key: 'nombre', render: (_, d) => `Dr(a). ${d.nombres} ${d.apellidos}` },
     { title: 'Tipo', dataIndex: 'tipo', key: 'tipo', render: (t: TipoDoctor) => <Tag>{etiquetaTipo[t]}</Tag> },
     {
-      title: 'Especialidad',
-      dataIndex: 'especialidad_nombre',
+      title: 'Especialidades',
+      dataIndex: 'especialidades_nombres',
       key: 'esp',
-      render: (v: string | null) => v || '-',
+      render: (nombres: string[]) =>
+        nombres.length ? nombres.map((nombre) => <Tag key={nombre}>{nombre}</Tag>) : '-',
     },
     { title: 'Teléfono', dataIndex: 'telefono', key: 'tel', render: (v: string) => v || '-' },
     {

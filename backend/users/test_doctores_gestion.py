@@ -17,9 +17,8 @@ class DoctoresGestionTests(TestCase):
         self.admin = Usuario.objects.create_user("admin", password="x-Clave-2026!", rol="admin")
         self.recep = Usuario.objects.create_user("recep", password="x-Clave-2026!", rol="recepcionista")
         self.recep.sedes.set([self.sede_a])
-        self.ana = Doctor.objects.create(
-            tipo="propio", nombres="Ana", apellidos="López", especialidad=self.ortodoncia
-        )
+        self.ana = Doctor.objects.create(tipo="propio", nombres="Ana", apellidos="López")
+        self.ana.especialidades.set([self.ortodoncia])
         self.ana.sedes.set([self.sede_a])
         self.luis = Doctor.objects.create(tipo="contratado", nombres="Luis", apellidos="Mejía")
         self.luis.sedes.set([self.sede_b])
@@ -43,26 +42,47 @@ class DoctoresGestionTests(TestCase):
         self.assertEqual(self._ids("/api/doctores/?sede=%d" % self.sede_a.pk), {self.ana.pk})
         self.assertEqual(self._ids("/api/doctores/?activo=false"), {self.luis.pk})
 
-    def test_especialidad_se_elige_del_catalogo_y_muestra_nombre(self):
+    def test_especialidades_se_eligen_del_catalogo_y_muestran_nombres(self):
         respuesta = self.api.patch(
             f"/api/doctores/{self.luis.pk}/",
-            {"especialidad": self.endodoncia.pk, "sedes": [self.sede_a.pk]},
+            {"especialidades": [self.endodoncia.pk, self.ortodoncia.pk], "sedes": [self.sede_a.pk]},
             format="json",
         )
         self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
-        self.assertEqual(respuesta.json()["especialidad_nombre"], "Endodoncia")
+        self.assertEqual(
+            set(respuesta.json()["especialidades_nombres"]),
+            {"Endodoncia", "Ortodoncia"},
+        )
         self.luis.refresh_from_db()
-        self.assertEqual(self.luis.especialidad, self.endodoncia)
+        self.assertEqual(
+            set(self.luis.especialidades.values_list("nombre", flat=True)),
+            {"Endodoncia", "Ortodoncia"},
+        )
         self.assertEqual(list(self.luis.sedes.all()), [self.sede_a])
+
+    def test_puede_crear_doctor_con_varias_especialidades(self):
+        respuesta = self.api.post(
+            "/api/doctores/",
+            {
+                "tipo": "contratado",
+                "nombres": "Carla",
+                "apellidos": "Núñez",
+                "especialidades": [self.ortodoncia.pk, self.endodoncia.pk],
+                "sedes": [self.sede_a.pk],
+            },
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(respuesta.json()["especialidades"]), 2)
 
     def test_especialidad_inactiva_no_se_puede_asignar(self):
         self.endodoncia.activo = False
         self.endodoncia.save()
         respuesta = self.api.patch(
-            f"/api/doctores/{self.luis.pk}/", {"especialidad": self.endodoncia.pk}, format="json"
+            f"/api/doctores/{self.luis.pk}/", {"especialidades": [self.endodoncia.pk]}, format="json"
         )
         self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("especialidad", respuesta.json())
+        self.assertIn("especialidades", respuesta.json())
 
     def test_desactiva_doctor(self):
         self.api.patch(f"/api/doctores/{self.ana.pk}/", {"activo": False}, format="json")
