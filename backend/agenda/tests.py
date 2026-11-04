@@ -106,7 +106,7 @@ class AlcancePorSedeTests(TestCase):
             format="json",
         )
         self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("tipo_trabajo", respuesta.json())
+        self.assertIn("tipos_trabajo", respuesta.json())
 
     def test_hora_fin_debe_ser_posterior(self):
         respuesta = self.api_recep.post(
@@ -937,3 +937,123 @@ class ListaEsperaTests(TestCase):
         respuesta = self._agendar()
         self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("hora_inicio", respuesta.json())
+
+
+class OrigenAtencionTests(TestCase):
+    """La cita guarda el canal de creación y un historial de cambios."""
+
+    @classmethod
+    def setUpTestData(cls):
+        org = Organizacion.objects.create(nombre="Clínica")
+        cls.sede_a = Sede.objects.create(organizacion=org, nombre="Sede A")
+        cls.sede_b = Sede.objects.create(organizacion=org, nombre="Sede B")
+        cls.recep = Usuario.objects.create_user(
+            "recep",
+            password="x-Clave-2026!",
+            rol="recepcionista",
+            first_name="Rosa",
+            last_name="Pérez",
+        )
+        cls.recep.sedes.set([cls.sede_a])
+        cls.otro = Usuario.objects.create_user(
+            "otro", password="x-Clave-2026!", rol="recepcionista"
+        )
+        cls.doctor = Doctor.objects.create(tipo="contratado", nombres="Luis", apellidos="Mejía")
+        cls.doctor.sedes.set([cls.sede_a, cls.sede_b])
+        cls.tipo = TipoTrabajo.objects.create(nombre="Limpieza")
+        cls.paciente = Paciente.objects.create(nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
+        cls.fecha = timezone.localdate() + timedelta(days=30)
+
+    def setUp(self):
+        self.api = APIClient()
+        self.api.force_login(self.recep)
+
+    def _datos(self, **cambios):
+        datos = {
+            "sede": self.sede_a.pk,
+            "doctor": self.doctor.pk,
+            "paciente": self.paciente.pk,
+            "tipo_trabajo": self.tipo.pk,
+            "fecha": self.fecha.isoformat(),
+            "hora_inicio": "09:00",
+            "hora_fin": "10:00",
+            "honorario_doctor": "300",
+        }
+        datos.update(cambios)
+        return datos
+
+    def _crear(self, **cambios):
+        return self.api.post("/api/atenciones/", self._datos(**cambios), format="json")
+
+    def test_creacion_desde_panel_registra_origen_y_usuario(self):
+        respuesta = self._crear()
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        datos = respuesta.json()
+        self.assertEqual(datos["origen"], Atencion.Origen.PANEL)
+        self.assertEqual(datos["origen_nombre"], "Panel")
+        self.assertEqual(datos["creado_por"], self.recep.pk)
+        self.assertEqual(datos["creado_por_nombre"], "Rosa Pérez")
+        atencion = Atencion.objects.get(pk=datos["id"])
+        self.assertEqual(atencion.origen, Atencion.Origen.PANEL)
+        self.assertEqual(atencion.creado_por, self.recep)
+
+    def test_origen_y_creado_por_son_solo_lectura(self):
+        respuesta = self._crear(
+            origen=Atencion.Origen.AGENTE_WHATSAPP,
+            creado_por=self.otro.pk,
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.json()["origen"], Atencion.Origen.PANEL)
+        self.assertEqual(respuesta.json()["creado_por"], self.recep.pk)
+
+    def test_filtra_por_origen(self):
+        panel = self._crear().json()
+        agente = Atencion.objects.create(
+            sede=self.sede_a,
+            doctor=self.doctor,
+            paciente=self.paciente,
+            tipo_trabajo=self.tipo,
+            fecha=self.fecha,
+            hora_inicio=time(10),
+            hora_fin=time(11),
+            origen=Atencion.Origen.AGENTE_WHATSAPP,
+        )
+        respuesta = self.api.get("/api/atenciones/?origen=agente_whatsapp")
+        ids = [item["id"] for item in respuesta.json()["results"]]
+        self.assertEqual(ids, [agente.pk])
+        self.assertNotIn(panel["id"], ids)
+
+    def test_historial_registra_creacion_y_cambio(self):
+        creada = self._crear().json()
+        cambio = self.api.patch(
+            f"/api/atenciones/{creada['id']}/",
+            {"estado": Atencion.Estado.CONFIRMADA},
+            format="json",
+        )
+        self.assertEqual(cambio.status_code, status.HTTP_200_OK)
+
+        respuesta = self.api.get(f"/api/atenciones/{creada['id']}/historial/")
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        registros = respuesta.json()
+        self.assertEqual(len(registros), 2)
+        self.assertEqual(registros[0]["tipo"], "~")
+        self.assertEqual(registros[0]["tipo_nombre"], "Actualizada")
+        self.assertEqual(registros[0]["usuario"], self.recep.username)
+        self.assertEqual(registros[0]["usuario_nombre"], "Rosa Pérez")
+        self.assertTrue(any(cambio["campo"] == "estado" for cambio in registros[0]["cambios"]))
+        self.assertEqual(registros[1]["tipo"], "+")
+        self.assertEqual(registros[1]["tipo_nombre"], "Creada")
+        self.assertEqual(registros[1]["usuario"], self.recep.username)
+
+    def test_historial_no_muestra_citas_de_otra_sede(self):
+        atencion_b = Atencion.objects.create(
+            sede=self.sede_b,
+            doctor=self.doctor,
+            paciente=self.paciente,
+            tipo_trabajo=self.tipo,
+            fecha=self.fecha,
+            hora_inicio=time(9),
+            hora_fin=time(10),
+        )
+        respuesta = self.api.get(f"/api/atenciones/{atencion_b.pk}/historial/")
+        self.assertEqual(respuesta.status_code, status.HTTP_404_NOT_FOUND)

@@ -30,6 +30,13 @@ def _hora(valor):
     return valor.strftime("%H:%M")
 
 
+def _valor_historial(valor):
+    """Convierte fechas, horas y decimales a texto para el JSON del historial."""
+    if valor is None or isinstance(valor, (str, int, float, bool)):
+        return valor
+    return str(valor)
+
+
 class AtencionViewSet(viewsets.ModelViewSet):
     """
     Atenciones de las sedes del usuario. El admin ve todas. No se borran.
@@ -42,7 +49,11 @@ class AtencionViewSet(viewsets.ModelViewSet):
     http_method_names = METODOS_SIN_BORRADO
 
     def get_queryset(self):
-        qs = Atencion.objects.select_related("sede", "doctor", "paciente", "tipo_trabajo")
+        qs = Atencion.objects.select_related(
+            "sede", "doctor", "paciente", "tipo_trabajo", "creado_por"
+        ).prefetch_related(
+            "trabajos__tipo_trabajo", "pagos", "pagos_doctor"
+        )
         qs = filtrar_por_sede(qs, self.request.user, campo_sede="sede")
         if self.action != "list":
             return qs
@@ -62,6 +73,16 @@ class AtencionViewSet(viewsets.ModelViewSet):
                 if estado in Atencion.Estado.values
             ]
             qs = qs.filter(estado__in=estados)
+        if params.get("origen") in Atencion.Origen.values:
+            qs = qs.filter(origen=params["origen"])
+        texto = params.get("q", "").strip()
+        if texto:
+            qs = qs.filter(
+                Q(paciente__nombres__icontains=texto)
+                | Q(paciente__apellidos__icontains=texto)
+                | Q(tipo_trabajo__nombre__icontains=texto)
+                | Q(trabajos__tipo_trabajo__nombre__icontains=texto)
+            ).distinct()
         return qs
 
     @action(detail=False, methods=["get"])
@@ -222,6 +243,45 @@ class AtencionViewSet(viewsets.ModelViewSet):
                 "hora_fin": _hora(fin),
             }
         return Response(datos)
+
+    @action(detail=True, methods=["get"])
+    def historial(self, request, pk=None):
+        """Cambios registrados de una cita, del más reciente al más antiguo."""
+        atencion = self.get_object()
+        tipos = {"+": "Creada", "~": "Actualizada", "-": "Eliminada"}
+        registros = []
+        for registro in atencion.history.all().select_related("history_user"):
+            cambios = []
+            anterior = registro.prev_record
+            if anterior is not None:
+                for cambio in registro.diff_against(anterior).changes:
+                    cambios.append(
+                        {
+                            "campo": cambio.field,
+                            "antes": _valor_historial(cambio.old),
+                            "despues": _valor_historial(cambio.new),
+                        }
+                    )
+            usuario = registro.history_user
+            if usuario is None:
+                usuario_nombre = "Sistema"
+            else:
+                usuario_nombre = (
+                    f"{usuario.first_name} {usuario.last_name}".strip() or usuario.username
+                )
+            registros.append(
+                {
+                    "id": registro.history_id,
+                    "fecha": registro.history_date,
+                    "tipo": registro.history_type,
+                    "tipo_nombre": tipos.get(registro.history_type, registro.history_type),
+                    "usuario": usuario.username if usuario else None,
+                    "usuario_nombre": usuario_nombre,
+                    "motivo": registro.history_change_reason or "",
+                    "cambios": cambios,
+                }
+            )
+        return Response(registros)
 
 
 class ListaEsperaViewSet(viewsets.ModelViewSet):

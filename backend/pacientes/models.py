@@ -18,7 +18,8 @@ class Paciente(models.Model):
     sexo = models.CharField(max_length=1, choices=Sexo.choices, blank=True)
     telefono = models.CharField(max_length=20, blank=True, help_text="Formato +504 ...")
     email = models.EmailField(blank=True)
-    direccion = models.CharField(max_length=255, blank=True)
+    # Obligatoria. Si el paciente no la da (p. ej. por WhatsApp), se usa la de la sede donde se atiende.
+    direccion = models.CharField(max_length=255)
     sede_origen = models.ForeignKey(
         "sedes.Sede",
         null=True,

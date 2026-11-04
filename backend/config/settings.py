@@ -14,7 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env(
     DJANGO_DEBUG=(bool, False),
-    DJANGO_ALLOWED_HOSTS=(list, ["localhost", "127.0.0.1"]),
+    DJANGO_ALLOWED_HOSTS=(list, ["localhost", "127.0.0.1", ".ngrok-free.dev"]),
 )
 
 _env_file = BASE_DIR / ".env"
@@ -28,9 +28,12 @@ ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS")
 # Orígenes del frontend (Vite en desarrollo) permitidos para peticiones con CSRF
 CSRF_TRUSTED_ORIGINS = env.list(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
-    default=["http://localhost:5173", "http://127.0.0.1:5173"],
+    default=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://*.ngrok-free.dev",
+    ],
 )
-
 
 INSTALLED_APPS = [
     "django.contrib.admin",

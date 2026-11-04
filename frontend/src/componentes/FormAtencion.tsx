@@ -27,7 +27,13 @@ type Props = {
   onCerrar: () => void
 }
 
-type Valores = Omit<DatosAtencion, 'honorario_doctor'> & { honorario_doctor: number | null }
+type Valores = Omit<
+  DatosAtencion,
+  'tipo_trabajo' | 'tipos_trabajo' | 'honorario_doctor'
+> & {
+  tipos_trabajo: number[]
+  honorario_doctor: number | null
+}
 
 /** Registro y edición de una visita. El doctor se elige entre los asignados a la sede. */
 export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
@@ -48,6 +54,7 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
   const horaInicio = Form.useWatch('hora_inicio', form)
   const horaFin = Form.useWatch('hora_fin', form)
   const estadoActual = Form.useWatch('estado', form)
+  const tiposElegidos = Form.useWatch('tipos_trabajo', form) ?? []
   const rangoValido = !!horaInicio && !!horaFin && horaFin > horaInicio
   const [busqueda, setBusqueda] = useState('')
   const [nombres, setNombres] = useState<Record<number, string>>({})
@@ -98,6 +105,10 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
     )
 
   const huecos = disponibilidad?.doctores[0]?.huecos ?? []
+  const precioTotal = tiposElegidos.reduce((total, id) => {
+    const tipo = tipos?.results.find((item) => item.id === id)
+    return total + (tipo ? Number(tipo.precio) : 0)
+  }, 0)
   const cerrada = disponibilidad?.abierta === false
   const sinHorario = disponibilidad?.horario_configurado === false
   const fueraDeHorario =
@@ -151,7 +162,9 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
         sede: atencion.sede,
         doctor: atencion.doctor,
         paciente: atencion.paciente,
-        tipo_trabajo: atencion.tipo_trabajo,
+        tipos_trabajo: atencion.trabajos.length
+          ? atencion.trabajos.map((trabajo) => trabajo.tipo_trabajo)
+          : [atencion.tipo_trabajo],
         estado: atencion.estado,
         fecha: atencion.fecha,
         hora_inicio: atencion.hora_inicio.slice(0, 5),
@@ -191,6 +204,7 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
       message.success(editando ? 'Cita actualizada' : 'Cita creada')
       cliente.invalidateQueries({ queryKey: ['atenciones'] })
       cliente.invalidateQueries({ queryKey: ['disponibilidad'] })
+      cliente.invalidateQueries({ queryKey: ['caja'] })
       onCerrar()
     },
     onError: (e) => {
@@ -204,8 +218,11 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
   })
 
   function enviar(valores: Valores) {
+    const tipos = valores.tipos_trabajo ?? []
     guardar.mutate({
       ...valores,
+      tipo_trabajo: tipos[0],
+      tipos_trabajo: tipos,
       estado: editando ? (valores.estado ?? 'pendiente') : 'pendiente',
       procedimiento: valores.procedimiento ?? '',
       observaciones: valores.observaciones ?? '',
@@ -249,9 +266,14 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
               options={Object.entries(nombres).map(([id, nombre]) => ({ value: Number(id), label: nombre }))}
             />
           </Form.Item>
-          <Form.Item name="tipo_trabajo" label="Tipo de trabajo" rules={[{ required: true, message: 'Elige el tipo' }]}>
+          <Form.Item
+            name="tipos_trabajo"
+            label="Tipos de trabajo"
+            rules={[{ required: true, message: 'Elige al menos un tipo de trabajo' }]}
+          >
             <Select
-              placeholder="Elige el tipo de trabajo"
+              mode="multiple"
+              placeholder="Elige uno o varios tipos de trabajo"
               options={tipos?.results.map((t) => ({ value: t.id, label: t.nombre }))}
             />
           </Form.Item>
@@ -289,8 +311,17 @@ export default function FormAtencion({ abierto, atencion, onCerrar }: Props) {
             />
           )}
           <Form.Item
+            label="Precio total al paciente (HNL)"
+            extra="Se calcula automáticamente con los precios de los tipos de trabajo."
+          >
+            <Input
+              value={`L ${precioTotal.toLocaleString('es-HN', { minimumFractionDigits: 2 })}`}
+              disabled
+            />
+          </Form.Item>
+          <Form.Item
             name="honorario_doctor"
-            label="Honorario pagado al doctor (HNL)"
+            label="Comisión / honorario del doctor (HNL)"
             extra={estadoActual === 'completada' ? 'Obligatorio al completar la cita.' : 'Puedes dejarlo en 0 mientras la cita está pendiente.'}
             rules={[
               {

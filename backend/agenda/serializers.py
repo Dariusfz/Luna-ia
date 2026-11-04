@@ -1,16 +1,30 @@
+from decimal import Decimal
+
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
 from config.validadores import MENSAJE_MONTO_MAXIMO, MONTO_MAXIMO
 from pacientes.querysets import pacientes_visibles
+from servicios.models import TipoTrabajo
 from users.models import Doctor
 from users.permisos import puede_usar_sede
 
 from .horarios import error_horario
-from .models import Atencion, JornadaExterna, ListaEspera
+from .models import Atencion, AtencionTrabajo, JornadaExterna, ListaEspera
 
 # Estados que reservan el horario del doctor y del paciente.
 ESTADOS_QUE_OCUPAN = (Atencion.Estado.PENDIENTE, Atencion.Estado.CONFIRMADA)
+
+
+class AtencionTrabajoSerializer(serializers.ModelSerializer):
+    tipo_trabajo_nombre = serializers.CharField(
+        source="tipo_trabajo.nombre", read_only=True
+    )
+
+    class Meta:
+        model = AtencionTrabajo
+        fields = ["id", "tipo_trabajo", "tipo_trabajo_nombre", "precio"]
 
 
 class AtencionSerializer(serializers.ModelSerializer):
@@ -20,6 +34,23 @@ class AtencionSerializer(serializers.ModelSerializer):
     doctor_tipo = serializers.CharField(source="doctor.tipo", read_only=True)
     paciente_nombre = serializers.SerializerMethodField()
     tipo_trabajo_nombre = serializers.SerializerMethodField()
+    origen_nombre = serializers.CharField(source="get_origen_display", read_only=True)
+    creado_por_nombre = serializers.SerializerMethodField()
+    total_pagado = serializers.SerializerMethodField()
+    saldo_pendiente = serializers.SerializerMethodField()
+    total_pagado_doctor = serializers.SerializerMethodField()
+    saldo_doctor = serializers.SerializerMethodField()
+    trabajos = AtencionTrabajoSerializer(many=True, read_only=True)
+    tipos_trabajo = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=TipoTrabajo.objects.all(),
+        required=False,
+        write_only=True,
+    )
+    tipo_trabajo = serializers.PrimaryKeyRelatedField(
+        queryset=TipoTrabajo.objects.all(),
+        required=False,
+    )
 
     class Meta:
         model = Atencion
@@ -34,17 +65,39 @@ class AtencionSerializer(serializers.ModelSerializer):
             "paciente_nombre",
             "tipo_trabajo",
             "tipo_trabajo_nombre",
+            "tipos_trabajo",
+            "trabajos",
             "estado",
+            "origen",
+            "origen_nombre",
+            "creado_por",
+            "creado_por_nombre",
             "fecha",
             "hora_inicio",
             "hora_fin",
             "procedimiento",
+            "precio_paciente",
             "honorario_doctor",
+            "total_pagado",
+            "saldo_pendiente",
+            "total_pagado_doctor",
+            "saldo_doctor",
             "observaciones",
             "creada",
             "actualizada",
         ]
-        read_only_fields = ["id", "creada", "actualizada"]
+        read_only_fields = [
+            "id",
+            "origen",
+            "creado_por",
+            "precio_paciente",
+            "total_pagado",
+            "saldo_pendiente",
+            "total_pagado_doctor",
+            "saldo_doctor",
+            "creada",
+            "actualizada",
+        ]
 
     def get_sede_nombre(self, obj) -> str:
         return obj.sede.nombre
@@ -56,7 +109,97 @@ class AtencionSerializer(serializers.ModelSerializer):
         return f"{obj.paciente.nombres} {obj.paciente.apellidos}"
 
     def get_tipo_trabajo_nombre(self, obj) -> str:
-        return obj.tipo_trabajo.nombre
+        nombres = [trabajo.tipo_trabajo.nombre for trabajo in obj.trabajos.all()]
+        return " + ".join(nombres) if nombres else obj.tipo_trabajo.nombre
+
+    def get_creado_por_nombre(self, obj) -> str | None:
+        if not obj.creado_por_id:
+            return None
+        nombre = f"{obj.creado_por.first_name} {obj.creado_por.last_name}".strip()
+        return nombre or obj.creado_por.username
+
+    @staticmethod
+    def _sumar(registros) -> Decimal:
+        return sum((registro.monto for registro in registros), Decimal("0"))
+
+    def get_total_pagado(self, obj) -> str:
+        return str(self._sumar(obj.pagos.all()))
+
+    def get_saldo_pendiente(self, obj) -> str:
+        saldo = obj.precio_paciente - self._sumar(obj.pagos.all())
+        return str(max(saldo, Decimal("0")))
+
+    def get_total_pagado_doctor(self, obj) -> str:
+        return str(self._sumar(obj.pagos_doctor.all()))
+
+    def get_saldo_doctor(self, obj) -> str:
+        saldo = obj.honorario_doctor - self._sumar(obj.pagos_doctor.all())
+        return str(max(saldo, Decimal("0")))
+
+    @transaction.atomic
+    def create(self, validated_data):
+        request = self.context.get("request")
+        origen = self.context.get("origen", Atencion.Origen.PANEL)
+        if "creado_por" in self.context:
+            creado_por = self.context["creado_por"]
+        elif origen == Atencion.Origen.PANEL and request and request.user.is_authenticated:
+            creado_por = request.user
+        else:
+            creado_por = None
+
+        tipos = validated_data.pop("tipos_trabajo", None)
+        tipo_principal = validated_data.pop("tipo_trabajo", None)
+        if tipos is None:
+            tipos = [tipo_principal] if tipo_principal else []
+        if not tipos:
+            raise serializers.ValidationError(
+                {"tipos_trabajo": "Selecciona al menos un tipo de trabajo."}
+            )
+
+        validated_data["tipo_trabajo"] = tipos[0]
+        validated_data["precio_paciente"] = sum(
+            (tipo.precio for tipo in tipos), Decimal("0")
+        )
+        atencion = Atencion.objects.create(
+            origen=origen, creado_por=creado_por, **validated_data
+        )
+        for indice, tipo in enumerate(tipos):
+            AtencionTrabajo.objects.create(
+                atencion=atencion,
+                tipo_trabajo=tipo,
+                precio=tipo.precio,
+                orden=indice,
+            )
+        return atencion
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        tipos = validated_data.pop("tipos_trabajo", None)
+        tipo_principal = validated_data.pop("tipo_trabajo", None)
+        if tipos is None and tipo_principal is not None:
+            tipos = [tipo_principal]
+        if tipos is not None:
+            if not tipos:
+                raise serializers.ValidationError(
+                    {"tipos_trabajo": "Selecciona al menos un tipo de trabajo."}
+                )
+            validated_data["tipo_trabajo"] = tipos[0]
+            validated_data["precio_paciente"] = sum(
+                (tipo.precio for tipo in tipos), Decimal("0")
+            )
+
+        atencion = super().update(instance, validated_data)
+        if tipos is not None:
+            for trabajo in atencion.trabajos.all():
+                trabajo.delete()
+            for indice, tipo in enumerate(tipos):
+                AtencionTrabajo.objects.create(
+                    atencion=atencion,
+                    tipo_trabajo=tipo,
+                    precio=tipo.precio,
+                    orden=indice,
+                )
+        return atencion
 
     def validate_sede(self, sede):
         if not puede_usar_sede(self.context["request"].user, sede):
@@ -80,6 +223,24 @@ class AtencionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Este tipo de trabajo está inactivo.")
         return tipo
 
+    def validate_tipos_trabajo(self, tipos):
+        if not tipos:
+            raise serializers.ValidationError(
+                "Selecciona al menos un tipo de trabajo."
+            )
+        vistos = set()
+        for tipo in tipos:
+            if tipo.pk in vistos:
+                raise serializers.ValidationError(
+                    "No repitas el mismo tipo de trabajo."
+                )
+            if not tipo.activo:
+                raise serializers.ValidationError(
+                    f"El tipo de trabajo «{tipo.nombre}» está inactivo."
+                )
+            vistos.add(tipo.pk)
+        return tipos
+
     def validate_honorario_doctor(self, valor):
         if valor < 0:
             raise serializers.ValidationError("El honorario no puede ser negativo.")
@@ -88,6 +249,19 @@ class AtencionSerializer(serializers.ModelSerializer):
         return valor
 
     def validate(self, data):
+        tipos = data.get("tipos_trabajo")
+        tipo = data.get("tipo_trabajo")
+        if self.instance is None and not tipos and not tipo:
+            raise serializers.ValidationError(
+                {"tipos_trabajo": "Selecciona al menos un tipo de trabajo."}
+            )
+        if tipos:
+            total = sum((item.precio for item in tipos), Decimal("0"))
+            if total > MONTO_MAXIMO:
+                raise serializers.ValidationError(
+                    {"tipos_trabajo": MENSAJE_MONTO_MAXIMO}
+                )
+
         inicio = data.get("hora_inicio", getattr(self.instance, "hora_inicio", None))
         fin = data.get("hora_fin", getattr(self.instance, "hora_fin", None))
         if inicio and fin and fin <= inicio:

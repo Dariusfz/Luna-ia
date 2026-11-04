@@ -6,6 +6,7 @@ from rest_framework.routers import DefaultRouter
 
 from agenda.views import AtencionViewSet, JornadaExternaViewSet, ListaEsperaViewSet
 from pacientes.views import PacienteViewSet
+from pagos.views import PagoDoctorViewSet, PagoViewSet, ResumenCajaView
 from sedes.views import FeriadoViewSet, HorarioSedeViewSet, LugarExternoViewSet, SedeViewSet
 from servicios.views import EspecialidadViewSet, TipoTrabajoViewSet
 from users.views import (
@@ -32,6 +33,8 @@ router.register("pacientes", PacienteViewSet, basename="paciente")
 router.register("atenciones", AtencionViewSet, basename="atencion")
 router.register("lista-espera", ListaEsperaViewSet, basename="lista-espera")
 router.register("jornadas-externas", JornadaExternaViewSet, basename="jornada-externa")
+router.register("pagos", PagoViewSet, basename="pago")
+router.register("pagos-doctores", PagoDoctorViewSet, basename="pago-doctor")
 router.register("sedes", SedeViewSet, basename="sede")
 router.register("horarios-sede", HorarioSedeViewSet, basename="horario-sede")
 router.register("feriados", FeriadoViewSet, basename="feriado")
@@ -66,5 +69,6 @@ urlpatterns = [
         ConfirmarRecuperacionView.as_view(),
         name="auth-recuperar-confirmar",
     ),
+    path("api/caja/resumen/", ResumenCajaView.as_view(), name="caja-resumen"),
     path("api/", include(router.urls)),
 ]

@@ -22,14 +22,18 @@ Sistema ERP para una clínica odontológica con **3 sedes** que permite:
 ## 3. Arquitectura
 
 ```
-Paciente ─► WhatsApp ─► Evolution/Cloud API ─webhook─► n8n ─► LLM (Ollama dev / API prod)
-                                                          ├─► Backend Django (API)
-                                                          └─► Whisper (audio → texto)
+Paciente ─► WhatsApp ─► Evolution/Cloud API ─webhook─► Django (api_agente)
+                                                        ├─► Celery (cola audio) ─► Whisper (audio → texto)
+                                                        ├─► LLM (Ollama dev / API prod) ─tools─► API Django (mismo proceso)
+                                                        └─► Evolution API (respuesta al paciente)
+n8n ─► solo recordatorios (pacientes, doctores, asistentes) ─► Evolution/Cloud API
 Personal ─► (cloudflared opcional) ─► reverse proxy ─► [React + /api] ─► Django
                                                                         ├─► PostgreSQL
                                                                         ├─► Redis
                                                                         └─► MinIO
 ```
+
+> **Decisión de integración (03/11/2026):** el flujo del agente es **Evolution → Django → LLM**. n8n no interviene en la ruta de mensajes entrantes; solo ejecuta recordatorios programados. Los audios se descargan y transcriben en Django/Celery (no en n8n) para evitar saltos y copias de los archivos.
 
 - **Dev/local:** todo en una máquina (16 GB) + Ollama en GPU + Whisper local.
 - **Producción (venta):** VPS con reverse proxy (Caddy/TLS). El LLM va por **API en la nube**; Ollama no se usa en producción.
@@ -47,7 +51,7 @@ Personal ─► (cloudflared opcional) ─► reverse proxy ─► [React + /api
 | Estado/datos front | TanStack Query + React Router |
 | LLM | Cliente **agnóstico** compatible-OpenAI (`httpx`): Ollama en dev, API en prod |
 | Audio (STT) | **faster-whisper** local (`small`/`base`, `language=es`) |
-| Automatización | n8n |
+| Automatización | n8n (solo recordatorios; el agente no pasa por n8n) |
 | WhatsApp | Evolution API (Baileys) en dev/demo → Meta Cloud API en producción |
 | Proxy/TLS | Caddy (producción); cloudflared opcional para demo local |
 | Contenedores | Docker + docker-compose (perfiles `dev` y `prod`) |
@@ -68,15 +72,27 @@ LLM_MODEL=qwen3:8b                      # dev; en prod el modelo de la API
 - **Dev:** Ollama + `qwen3:8b` (respaldos: `llama3.1:8b`, `qwen3:4b`).
 - **Prod/cliente:** modelo en la nube vía API (VPS pagado por membresía).
 
-### 5.2 Agente de WhatsApp (n8n)
-- Tools que llaman al backend (nunca SQL ni tocar la BD directamente):
-  `crear_cita`, `modificar_cita`, `cancelar_cita`, `consultar_disponibilidad`.
-- **Un solo número de WhatsApp** para las 3 sedes: n8n **debe resolver la sede** (si el paciente no la menciona, la pregunta antes de agendar). La sede es argumento obligatorio y se valida en Django.
+### 5.2 Agente de WhatsApp (Django)
+- Orquestación en `api_agente`: el webhook de Evolution llama a Django, que encola el procesamiento en Celery, ejecuta el LLM con tools y responde por Evolution API.
+- Tools que llaman a la API de Django con un **token de servicio** (nunca SQL ni acceso directo a la BD):
+  `consultar_disponibilidad`, `crear_cita`, `modificar_cita`, `cancelar_cita`, `buscar_paciente`, `crear_paciente`, `consultar_sedes`.
+- **Todas las sedes:** el token de servicio puede consultar y agendar en cualquiera de las 3 sedes. La sede es argumento obligatorio; si el paciente no la menciona, el agente la pregunta antes de agendar.
+- **Un solo número de WhatsApp** para las 3 sedes. El paciente se identifica por el teléfono del remitente; el LLM **nunca** elige el `paciente_id`: lo toma la capa de tools desde la conversación.
+- **Confirmación explícita** antes de crear, modificar o cancelar citas y pacientes. El estado se guarda en Django, no en el prompt.
 - **Reglas de negocio y permisos viven en Django**, no en el prompt.
+- **Creación de pacientes por WhatsApp:**
+  - Obligatorios: nombres, apellidos, teléfono (ya conocido por el remitente), sede de origen y dirección.
+  - Si el paciente no da dirección, se usa la dirección de la sede donde quiere ser atendido.
+  - Recomendados (se preguntan, no bloquean): fecha de nacimiento, identidad, sexo, correo.
+  - Antes de crear, buscar por teléfono e identidad. Si el teléfono ya existe, no se duplica: se pregunta para quién es la cita o se deriva a recepción.
+  - El agente informa el tratamiento de datos y registra la aceptación.
+- **Tabla de conversaciones:** `ConversacionWhatsApp` y `MensajeWhatsApp` en PostgreSQL, con contenido cifrado y retención configurable (por defecto 90 días).
 
 ### 5.3 Audio (notas de voz)
-Flujo: audio (OGG/Opus) → descargar → **Whisper** → texto en español → entra al agente como mensaje normal.
-- Servicio de transcripción local con endpoint HTTP; n8n lo invoca.
+Flujo: webhook de Evolution → tarea Celery en cola `audio` → descarga del audio (base64, en memoria) → **faster-whisper** (`language="es"`, `vad_filter=True`) → texto → entra al agente como mensaje normal.
+- El modelo se carga una vez por proceso worker. Concurrencia 1 en la cola `audio`.
+- Dedupe por `messageId` de WhatsApp.
+- El audio no se guarda en disco ni en BD; solo el texto transcrito.
 - Fallback: si la transcripción falla, pedir al paciente que escriba.
 
 ### 5.4 Asistente interno del ERP
@@ -122,7 +138,7 @@ Flujo: audio (OGG/Opus) → descargar → **Whisper** → texto en español → 
 - `Sede` (nombre, dirección, horarios, feriados)
 - `Usuario` (rol + M2M sedes)
 - `Doctor` (especialidades, M2M sedes, horario por sede)
-- `Paciente` (global, sede de origen), `HistoriaClinica`, `Odontograma`
+- `Paciente` (global, sede de origen, dirección obligatoria: si no se conoce, la de la sede donde se atiende), `HistoriaClinica`, `Odontograma`
 - `Servicio` → `Tratamiento` → `PlanTratamiento`
 - `Atencion` (sede, doctor, paciente, tipo de trabajo, estado: pendiente/confirmada/completada/cancelada), `ListaEspera`
 - `Insumo`, `Stock` (por sede), `MovimientoStock`, `Proveedor`, `OrdenCompra`

@@ -1,7 +1,15 @@
-import type { EstadoAtencion } from '../constantes/atenciones'
+import type { EstadoAtencion, OrigenAtencion } from '../constantes/atenciones'
 import type { TipoDoctor } from './catalogos'
 import { api } from './cliente'
 import type { Paginado } from './recursos'
+
+export type AtencionTrabajo = {
+  id: number
+  tipo_trabajo: number
+  tipo_trabajo_nombre: string
+  /** Precio del tipo de trabajo al momento de la cita. */
+  precio: string
+}
 
 export type Atencion = {
   id: number
@@ -14,13 +22,24 @@ export type Atencion = {
   paciente_nombre: string
   tipo_trabajo: number
   tipo_trabajo_nombre: string
+  trabajos: AtencionTrabajo[]
   estado: EstadoAtencion
+  origen: OrigenAtencion
+  origen_nombre: string
+  creado_por: number | null
+  creado_por_nombre: string | null
   fecha: string
   hora_inicio: string
   hora_fin: string
   procedimiento: string
+  /** Total calculado con los precios de los tipos de trabajo, como texto decimal. */
+  precio_paciente: string
   /** Llega como texto decimal, por ejemplo "300.00". */
   honorario_doctor: string
+  total_pagado: string
+  saldo_pendiente: string
+  total_pagado_doctor: string
+  saldo_doctor: string
   observaciones: string
 }
 
@@ -28,8 +47,10 @@ export type FiltrosAtenciones = {
   sede?: number | null
   doctor?: number | null
   estado?: EstadoAtencion | EstadoAtencion[] | null
+  origen?: OrigenAtencion | null
   desde?: string
   hasta?: string
+  q?: string
 }
 
 export const listarAtenciones = (pagina: number, f: FiltrosAtenciones) => {
@@ -40,8 +61,10 @@ export const listarAtenciones = (pagina: number, f: FiltrosAtenciones) => {
     const estados = Array.isArray(f.estado) ? f.estado.join(',') : f.estado
     params.set('estado', estados)
   }
+  if (f.origen) params.set('origen', f.origen)
   if (f.desde) params.set('desde', f.desde)
   if (f.hasta) params.set('hasta', f.hasta)
+  if (f.q) params.set('q', f.q)
   return api<Paginado<Atencion>>(`/atenciones/?${params.toString()}`)
 }
 
@@ -50,6 +73,7 @@ export type DatosAtencion = {
   doctor: number
   paciente: number
   tipo_trabajo: number
+  tipos_trabajo?: number[]
   estado?: EstadoAtencion
   fecha: string
   hora_inicio: string
@@ -126,3 +150,23 @@ export const consultarDisponibilidad = (f: FiltrosDisponibilidad) => {
   if (f.duracion) params.set('duracion', String(f.duracion))
   return api<Disponibilidad>(`/atenciones/disponibilidad/?${params.toString()}`)
 }
+
+export type CambioHistorial = {
+  campo: string
+  antes: string | number | null
+  despues: string | number | null
+}
+
+export type RegistroHistorial = {
+  id: number
+  fecha: string
+  tipo: '+' | '~' | '-'
+  tipo_nombre: string
+  usuario: string | null
+  usuario_nombre: string
+  motivo: string
+  cambios: CambioHistorial[]
+}
+
+export const listarHistorialAtencion = (id: number) =>
+  api<RegistroHistorial[]>(`/atenciones/${id}/historial/`)

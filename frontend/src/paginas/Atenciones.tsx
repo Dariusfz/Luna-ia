@@ -1,6 +1,6 @@
-import { EditOutlined, PlusOutlined } from '@ant-design/icons'
+import { EditOutlined, HistoryOutlined, PlusOutlined } from '@ant-design/icons'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Button, Card, DatePicker, Select, Space, Table, Tag, Typography } from 'antd'
+import { Button, Card, DatePicker, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import type { TableProps } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -8,7 +8,17 @@ import { listarAtenciones, type Atencion, type FiltrosAtenciones } from '../api/
 import { listarDoctores } from '../api/catalogos'
 import { listarSedes } from '../api/recursos'
 import FormAtencion from '../componentes/FormAtencion'
-import { COLOR_ESTADO, ETIQUETA_ESTADO, ESTADOS_ATENCION, type EstadoAtencion } from '../constantes/atenciones'
+import HistorialAtencion from '../componentes/HistorialAtencion'
+import {
+  COLOR_ESTADO,
+  COLOR_ORIGEN,
+  ETIQUETA_ESTADO,
+  ETIQUETA_ORIGEN,
+  ESTADOS_ATENCION,
+  ORIGENES_ATENCION,
+  type EstadoAtencion,
+  type OrigenAtencion,
+} from '../constantes/atenciones'
 
 const formatoLempiras = (v: string) => `L ${Number(v).toLocaleString('es-HN', { minimumFractionDigits: 2 })}`
 
@@ -17,16 +27,18 @@ export default function Atenciones() {
   const [sede, setSede] = useState<number | null>(null)
   const [doctor, setDoctor] = useState<number | null>(null)
   const [estado, setEstado] = useState<EstadoAtencion | null>(null)
+  const [origen, setOrigen] = useState<OrigenAtencion | null>(null)
   const [desde, setDesde] = useState<string>('')
   const [hasta, setHasta] = useState<string>('')
   const [formAbierto, setFormAbierto] = useState(false)
   const [editando, setEditando] = useState<Atencion | null>(null)
+  const [historial, setHistorial] = useState<Atencion | null>(null)
 
-  useEffect(() => setPagina(1), [sede, doctor, estado, desde, hasta])
+  useEffect(() => setPagina(1), [sede, doctor, estado, origen, desde, hasta])
 
   const filtros: FiltrosAtenciones = useMemo(
-    () => ({ sede, doctor, estado, desde, hasta }),
-    [sede, doctor, estado, desde, hasta],
+    () => ({ sede, doctor, estado, origen, desde, hasta }),
+    [sede, doctor, estado, origen, desde, hasta],
   )
 
   const { data, isPending, isFetching } = useQuery({
@@ -49,6 +61,23 @@ export default function Atenciones() {
       dataIndex: 'estado',
       key: 'estado',
       render: (e: EstadoAtencion) => <Tag color={COLOR_ESTADO[e]}>{ETIQUETA_ESTADO[e]}</Tag>,
+    },
+    {
+      title: 'Origen',
+      dataIndex: 'origen',
+      key: 'origen',
+      width: 145,
+      render: (o: OrigenAtencion, a) => (
+        <Tooltip
+          title={
+            a.creado_por_nombre
+              ? `Registrada por ${a.creado_por_nombre}`
+              : 'Creada automáticamente'
+          }
+        >
+          <Tag color={COLOR_ORIGEN[o]}>{ETIQUETA_ORIGEN[o]}</Tag>
+        </Tooltip>
+      ),
     },
     { title: 'Paciente', dataIndex: 'paciente_nombre', key: 'paciente' },
     {
@@ -74,16 +103,25 @@ export default function Atenciones() {
       title: '',
       key: 'acciones',
       render: (_, a) => (
-        <Button
-          size="small"
-          icon={<EditOutlined />}
-          onClick={() => {
-            setEditando(a)
-            setFormAbierto(true)
-          }}
-        >
-          Editar
-        </Button>
+        <Space size={4}>
+          <Button
+            size="small"
+            icon={<HistoryOutlined />}
+            onClick={() => setHistorial(a)}
+          >
+            Historial
+          </Button>
+          <Button
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => {
+              setEditando(a)
+              setFormAbierto(true)
+            }}
+          >
+            Editar
+          </Button>
+        </Space>
       ),
     },
   ]
@@ -138,6 +176,14 @@ export default function Atenciones() {
           onChange={(v) => setEstado(v ?? null)}
           options={ESTADOS_ATENCION.map((e) => ({ value: e, label: ETIQUETA_ESTADO[e] }))}
         />
+        <Select
+          allowClear
+          placeholder="Todos los orígenes"
+          style={{ width: 190 }}
+          value={origen}
+          onChange={(v) => setOrigen(v ?? null)}
+          options={ORIGENES_ATENCION.map((o) => ({ value: o, label: ETIQUETA_ORIGEN[o] }))}
+        />
         <DatePicker
           placeholder="Desde"
           onChange={(_, texto) => setDesde(typeof texto === 'string' ? texto : '')}
@@ -149,11 +195,17 @@ export default function Atenciones() {
       </Space>
 
       <FormAtencion abierto={formAbierto} atencion={editando} onCerrar={() => setFormAbierto(false)} />
+      <HistorialAtencion
+        abierto={historial !== null}
+        atencion={historial}
+        onCerrar={() => setHistorial(null)}
+      />
       <Table<Atencion>
         rowKey="id"
         columns={columnas}
         dataSource={data?.results}
         loading={isPending || isFetching}
+        scroll={{ x: 1200 }}
         pagination={{
           current: pagina,
           pageSize: 25,

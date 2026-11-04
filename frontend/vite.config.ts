@@ -6,7 +6,9 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: true,                      // escucha en la red, no solo en localhost
     port: 5173,
+    allowedHosts: ['.ngrok-free.dev'], // acepta cualquier subdominio de ngrok
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',

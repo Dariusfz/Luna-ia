@@ -132,6 +132,7 @@ export default function FormAgendarEspera({ abierto, espera, onCerrar }: Props) 
       cliente.invalidateQueries({ queryKey: ['disponibilidad'] })
       cliente.invalidateQueries({ queryKey: ['disponibilidad-espera'] })
       cliente.invalidateQueries({ queryKey: ['dashboard'] })
+      cliente.invalidateQueries({ queryKey: ['caja'] })
       onCerrar()
     },
     onError: (e) => {

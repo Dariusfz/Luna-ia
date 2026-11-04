@@ -2,9 +2,12 @@ import {
   CalendarOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  DollarOutlined,
   HourglassOutlined,
   MedicineBoxOutlined,
+  RiseOutlined,
   TeamOutlined,
+  WalletOutlined,
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd'
@@ -15,6 +18,7 @@ import { useNavigate } from 'react-router-dom'
 import { listarAtenciones, type Atencion } from '../api/atenciones'
 import { obtenerUsuarioActual } from '../api/auth'
 import { listarListaEspera } from '../api/listaEspera'
+import { obtenerResumenCaja } from '../api/pagos'
 import { listarPacientes, listarSedes } from '../api/recursos'
 import { COLOR_ESTADO, ETIQUETA_ESTADO, type EstadoAtencion } from '../constantes/atenciones'
 
@@ -83,6 +87,12 @@ export default function Inicio() {
   const { data: sedes } = useQuery({
     queryKey: ['sedes', 'resumen'],
     queryFn: () => listarSedes('true'),
+  })
+
+  const { data: cajaHoy } = useQuery({
+    queryKey: ['caja', 'resumen', hoy, hoy],
+    queryFn: () => obtenerResumenCaja({ desde: hoy, hasta: hoy }),
+    enabled: usuario?.es_admin === true,
   })
 
   const nombre = usuario ? `${usuario.nombres} ${usuario.apellidos}`.trim() || usuario.username : ''
@@ -188,6 +198,51 @@ export default function Inicio() {
           </Card>
         </Col>
       </Row>
+
+      {usuario?.es_admin && (
+        <Row gutter={[16, 16]}>
+          <Col xs={24} sm={12} xl={8}>
+            <Card
+              title="Caja de hoy"
+              extra={
+                <Button type="link" onClick={() => navegar('/caja')}>
+                  Ver caja
+                </Button>
+              }
+            >
+              <Statistic
+                title="Cobrado"
+                value={Number(cajaHoy?.cobrado ?? 0)}
+                precision={2}
+                prefix={<DollarOutlined />}
+                suffix="L"
+              />
+            </Card>
+          </Col>
+          <Col xs={24} sm={12} xl={8}>
+            <Card style={{ height: '100%' }}>
+              <Statistic
+                title="Comisión doctores"
+                value={Number(cajaHoy?.comision_doctores ?? 0)}
+                precision={2}
+                prefix={<WalletOutlined />}
+                suffix="L"
+              />
+            </Card>
+          </Col>
+          <Col xs={24} sm={12} xl={8}>
+            <Card style={{ height: '100%' }}>
+              <Statistic
+                title="Ganancia neta"
+                value={Number(cajaHoy?.ganancia ?? 0)}
+                precision={2}
+                prefix={<RiseOutlined />}
+                suffix="L"
+              />
+            </Card>
+          </Col>
+        </Row>
+      )}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={17}>

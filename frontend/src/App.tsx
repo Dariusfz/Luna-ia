@@ -4,6 +4,7 @@ import LayoutPrincipal from './componentes/LayoutPrincipal'
 import RequiereSesion from './componentes/RequiereSesion'
 import AceptarInvitacion from './paginas/AceptarInvitacion'
 import Atenciones from './paginas/Atenciones'
+import Caja from './paginas/Caja'
 import Configuracion from './paginas/Configuracion'
 import ConfirmarRecuperacion from './paginas/ConfirmarRecuperacion'
 import Doctores from './paginas/Doctores'
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="pacientes" element={<Pacientes />} />
           <Route path="atenciones" element={<Atenciones />} />
           <Route path="lista-espera" element={<ListaEspera />} />
+          <Route path="caja" element={<Caja />} />
           <Route path="personal" element={<Personal />} />
           <Route path="doctores" element={<Doctores />} />
           <Route path="especialidades" element={<Especialidades />} />

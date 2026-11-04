@@ -1,4 +1,6 @@
-﻿from django.core.validators import MaxValueValidator
+﻿from decimal import Decimal
+
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import F, Q
 from simple_history.models import HistoricalRecords
@@ -19,6 +21,12 @@ class Atencion(models.Model):
         COMPLETADA = "completada", "Completada"
         CANCELADA = "cancelada", "Cancelada"
 
+    class Origen(models.TextChoices):
+        PANEL = "panel", "Panel"
+        AGENTE_WHATSAPP = "agente_whatsapp", "Agente WhatsApp"
+        ASISTENTE_IA = "asistente_ia", "Asistente IA"
+        SISTEMA = "sistema", "Sistema"
+
     sede = models.ForeignKey("sedes.Sede", on_delete=models.PROTECT, related_name="atenciones")
     doctor = models.ForeignKey("users.Doctor", on_delete=models.PROTECT, related_name="atenciones")
     paciente = models.ForeignKey(
@@ -28,7 +36,14 @@ class Atencion(models.Model):
         "servicios.TipoTrabajo",
         on_delete=models.PROTECT,
         related_name="atenciones",
-        help_text="Tipo de trabajo realizado (obligatorio).",
+        help_text="Tipo principal; se sincroniza con el primero de los trabajos.",
+    )
+    tipos_trabajo = models.ManyToManyField(
+        "servicios.TipoTrabajo",
+        through="AtencionTrabajo",
+        related_name="atenciones_con_trabajo",
+        blank=True,
+        help_text="Tipos de trabajo incluidos en la cita.",
     )
     estado = models.CharField(
         max_length=20,
@@ -36,11 +51,36 @@ class Atencion(models.Model):
         default=Estado.PENDIENTE,
         help_text="Pendiente/confirmada: cita agendada. Completada: visita realizada.",
     )
+    origen = models.CharField(
+        max_length=20,
+        choices=Origen.choices,
+        default=Origen.PANEL,
+        db_index=True,
+        help_text="Canal por el que se creó la cita.",
+    )
+    creado_por = models.ForeignKey(
+        "users.Usuario",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="atenciones_creadas",
+        help_text="Usuario del panel que creó la cita; vacío si la creó el agente.",
+    )
     fecha = models.DateField()
     hora_inicio = models.TimeField()
     hora_fin = models.TimeField()
     procedimiento = models.CharField(
         max_length=200, blank=True, help_text="Detalle adicional del trabajo realizado"
+    )
+    precio_paciente = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text="Total calculado con los precios de los tipos de trabajo (HNL)",
+        validators=[
+            MinValueValidator(Decimal("0")),
+            MaxValueValidator(MONTO_MAXIMO, message=MENSAJE_MONTO_MAXIMO),
+        ],
     )
     honorario_doctor = models.DecimalField(
         max_digits=12,
@@ -70,6 +110,48 @@ class Atencion(models.Model):
 
     def __str__(self):
         return f"{self.fecha} {self.hora_inicio} - {self.paciente} ({self.sede})"
+
+
+class AtencionTrabajo(models.Model):
+    """Tipo de trabajo incluido en una cita, con el precio vigente al crearla."""
+
+    atencion = models.ForeignKey(
+        Atencion,
+        on_delete=models.CASCADE,
+        related_name="trabajos",
+    )
+    tipo_trabajo = models.ForeignKey(
+        "servicios.TipoTrabajo",
+        on_delete=models.PROTECT,
+        related_name="atenciones_trabajo",
+    )
+    precio = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text="Precio del tipo de trabajo al momento de la cita (HNL)",
+        validators=[
+            MinValueValidator(Decimal("0")),
+            MaxValueValidator(MONTO_MAXIMO, message=MENSAJE_MONTO_MAXIMO),
+        ],
+    )
+    orden = models.PositiveSmallIntegerField(default=0)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        ordering = ["orden", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["atencion", "tipo_trabajo"],
+                name="atencion_trabajo_unico",
+            )
+        ]
+        verbose_name = "trabajo de atención"
+        verbose_name_plural = "trabajos de atención"
+
+    def __str__(self):
+        return f"{self.atencion} - {self.tipo_trabajo}"
 
 
 class JornadaExterna(models.Model):

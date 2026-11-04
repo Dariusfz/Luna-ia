@@ -12,6 +12,7 @@ import {
   TagsOutlined,
   TeamOutlined,
   UserOutlined,
+  WalletOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Avatar, Button, Dropdown, Grid, Layout, Menu, Space, Typography } from 'antd'
@@ -36,10 +37,12 @@ const itemsBase: NonNullable<MenuProps['items']> = [
 ]
 
 const itemsAdmin: NonNullable<MenuProps['items']> = [
+  { key: '/caja', icon: <WalletOutlined />, label: 'Caja' },
   { key: '/sedes', icon: <BankOutlined />, label: 'Sedes' },
   { key: '/configuracion', icon: <SettingOutlined />, label: 'Configuración' },
   { key: '/personal', icon: <IdcardOutlined />, label: 'Personal' },
 ]
+
 
 export default function LayoutPrincipal() {
   const navigate = useNavigate()

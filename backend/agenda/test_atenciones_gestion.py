@@ -10,7 +10,7 @@ from servicios.models import TipoTrabajo
 from sedes.models import Organizacion, Sede
 from users.models import Doctor, Usuario
 
-from .models import Atencion
+from .models import Atencion, AtencionTrabajo
 
 
 class AtencionesGestionTests(TestCase):
@@ -58,6 +58,69 @@ class AtencionesGestionTests(TestCase):
         self.assertEqual(datos["paciente_nombre"], "Ana López")
         self.assertEqual(datos["tipo_trabajo_nombre"], "Limpieza")
         self.assertEqual(datos["estado"], "pendiente")
+
+    def test_precio_paciente_toma_el_precio_del_tipo_si_se_omite(self):
+        respuesta = self.recep_api.post("/api/atenciones/", self._datos(), format="json")
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.json()["precio_paciente"], "500.00")
+
+    def test_varios_tipos_suman_el_precio_y_se_guardan(self):
+        otro = TipoTrabajo.objects.create(nombre="Blanqueamiento", precio=250)
+        respuesta = self.recep_api.post(
+            "/api/atenciones/",
+            self._datos(
+                tipos_trabajo=[self.tipo.pk, otro.pk],
+                precio_paciente="1",
+            ),
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        datos = respuesta.json()
+        self.assertEqual(datos["precio_paciente"], "750.00")
+        self.assertEqual(datos["tipo_trabajo_nombre"], "Limpieza + Blanqueamiento")
+        self.assertEqual(len(datos["trabajos"]), 2)
+        self.assertEqual(
+            {trabajo["tipo_trabajo"] for trabajo in datos["trabajos"]},
+            {self.tipo.pk, otro.pk},
+        )
+
+    def test_cambiar_tipos_recalcula_el_precio(self):
+        otro = TipoTrabajo.objects.create(nombre="Blanqueamiento", precio=250)
+        creada = self.recep_api.post(
+            "/api/atenciones/",
+            self._datos(tipos_trabajo=[self.tipo.pk, otro.pk]),
+            format="json",
+        ).json()
+        respuesta = self.recep_api.patch(
+            f"/api/atenciones/{creada['id']}/",
+            {"tipos_trabajo": [otro.pk]},
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertEqual(respuesta.json()["precio_paciente"], "250.00")
+        self.assertEqual(respuesta.json()["tipo_trabajo"], otro.pk)
+        self.assertEqual(respuesta.json()["tipo_trabajo_nombre"], "Blanqueamiento")
+
+    def test_precio_del_tipo_queda_congelado_en_la_cita(self):
+        creada = self.recep_api.post(
+            "/api/atenciones/", self._datos(), format="json"
+        ).json()
+        self.tipo.precio = 900
+        self.tipo.save(update_fields=["precio"])
+        respuesta = self.recep_api.get(f"/api/atenciones/{creada['id']}/")
+        self.assertEqual(respuesta.json()["precio_paciente"], "500.00")
+        self.assertEqual(respuesta.json()["trabajos"][0]["precio"], "500.00")
+
+    def test_historial_registra_los_trabajos_de_la_cita(self):
+        otro = TipoTrabajo.objects.create(nombre="Blanqueamiento", precio=250)
+        creada = self.recep_api.post(
+            "/api/atenciones/",
+            self._datos(tipos_trabajo=[self.tipo.pk, otro.pk]),
+            format="json",
+        ).json()
+        self.assertEqual(
+            AtencionTrabajo.history.filter(atencion_id=creada["id"]).count(), 2
+        )
 
     def test_honorario_negativo_se_rechaza(self):
         respuesta = self.recep_api.post("/api/atenciones/", self._datos(honorario_doctor="-5"), format="json")
