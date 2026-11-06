@@ -111,7 +111,7 @@ class DoctoresAPITests(TestCase):
     # --- Reglas de atención -------------------------------------------------
 
     def _datos_atencion(self, doctor, sede):
-        paciente = Paciente.objects.create(nombres="P", apellidos="Q", sede_origen=self.sede_a)
+        paciente = Paciente.objects.create(direccion="Col. Centro", nombres="P", apellidos="Q", sede_origen=self.sede_a)
         tipo = TipoTrabajo.objects.get_or_create(nombre="Limpieza")[0]
         return {
             "sede": sede.pk, "doctor": doctor.pk, "paciente": paciente.pk,

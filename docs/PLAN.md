@@ -44,7 +44,7 @@ Personal ─► (cloudflared opcional) ─► reverse proxy ─► [React + /api
 | Capa | Tecnología |
 |---|---|
 | Backend | Django 5 + Django REST Framework + `drf-spectacular` (OpenAPI) |
-| Base de datos | PostgreSQL 16 (+ extensión `pgvector` reservada para futuro RAG) |
+| Base de datos | PostgreSQL 16 (imagen `postgres:16`; `pgvector` **no** instalado todavía, reservado para futuro RAG) |
 | Caché / colas | Redis + Celery (recordatorios, llamadas al LLM) |
 | Archivos | MinIO (radiografías, fotos, documentos) vía `django-storages` |
 | Frontend | React + Vite + TypeScript + **Ant Design 5** (`@ant-design/icons`, `@ant-design/charts`) |
@@ -66,27 +66,36 @@ Se configura **solo por variables de entorno** — cambiar de proveedor no requi
 LLM_PROVIDER=ollama|openai|groq|... 
 LLM_BASE_URL=http://<host>:11434/v1     # dev: Ollama; prod: API en la nube
 LLM_API_KEY=                            # vacío en dev local
-LLM_MODEL=qwen3:8b                      # dev; en prod el modelo de la API
+LLM_MODEL=llama3.1:8b                   # dev; en prod el modelo de la API
 ```
 
-- **Dev:** Ollama + `qwen3:8b` (respaldos: `llama3.1:8b`, `qwen3:4b`).
+- **Dev:** Ollama + `llama3.1:8b` (respaldos: `qwen3:4b`, `qwen3:8b`).
 - **Prod/cliente:** modelo en la nube vía API (VPS pagado por membresía).
+- **Decisión 06/11/2026 — modelo de dev:** se usa `llama3.1:8b`. Los modelos `qwen3` "razonan" y gastan cientos o miles de tokens internos aunque se les envíe `/no_think`; medido en la GTX 1060 (6 GB): `qwen3:4b` tarda 35–43 s por respuesta y sufre timeouts, `llama3.1:8b` responde en 2–3 s y no inventa acciones. `qwen3` quedó como alternativa si se dispone de más VRAM.
 
 ### 5.2 Agente de WhatsApp (Django)
 - Orquestación en `api_agente`: el webhook de Evolution llama a Django, que encola el procesamiento en Celery, ejecuta el LLM con tools y responde por Evolution API.
-- Tools que llaman a la API de Django con un **token de servicio** (nunca SQL ni acceso directo a la BD):
-  `consultar_disponibilidad`, `crear_cita`, `modificar_cita`, `cancelar_cita`, `buscar_paciente`, `crear_paciente`, `consultar_sedes`.
+- **Decisión 05/11/2026 — el agente corre en el mismo proceso Django.** Las tools usan serializers y modelos directamente (nunca SQL libre ni escritura sin validar); no hacen llamadas HTTP. El modelo `TokenServicio` queda solo para consumidores externos de `/api/agente/`, no para el flujo interno.
+- **Tools implementadas (06/11/2026):** `listar_sedes`, `consultar_disponibilidad`, `consultar_mis_pacientes`, `listar_mis_citas`, `seleccionar_paciente`, `preparar_paciente`, `preparar_cita`, `confirmar_accion`, `cancelar_accion`.
+- **Tools pendientes:** `modificar_cita` y `cancelar_cita` sobre citas ya creadas. Mientras no existan, el agente dice que no puede cancelar ni cambiar y pide llamar a la clínica.
+- **Crear o agendar es en dos pasos:** `preparar_*` guarda un borrador en `ConversacionWhatsApp.borrador`; `confirmar_accion` solo actúa si el último mensaje del paciente es afirmativo (se valida en código con una expresión regular, no en el prompt).
 - **Todas las sedes:** el token de servicio puede consultar y agendar en cualquiera de las 3 sedes. La sede es argumento obligatorio; si el paciente no la menciona, el agente la pregunta antes de agendar.
 - **Un solo número de WhatsApp** para las 3 sedes. El paciente se identifica por el teléfono del remitente; el LLM **nunca** elige el `paciente_id`: lo toma la capa de tools desde la conversación.
 - **Confirmación explícita** antes de crear, modificar o cancelar citas y pacientes. El estado se guarda en Django, no en el prompt.
 - **Reglas de negocio y permisos viven en Django**, no en el prompt.
-- **Creación de pacientes por WhatsApp:**
-  - Obligatorios: nombres, apellidos, teléfono (ya conocido por el remitente), sede de origen y dirección.
-  - Si el paciente no da dirección, se usa la dirección de la sede donde quiere ser atendido.
-  - Recomendados (se preguntan, no bloquean): fecha de nacimiento, identidad, sexo, correo.
+- **Creación de pacientes por WhatsApp (06/11/2026):**
+  - Obligatorios: nombres, apellidos, fecha de nacimiento y sede. El teléfono lo aporta la conversación.
+  - **DNI (identidad):** obligatorio para mayores de 18 años; opcional para menores, que se registran a nombre de un tutor. Se normaliza a 13 dígitos y es único cuando existe.
+  - La **edad no se guarda**: se calcula desde la fecha de nacimiento y se muestra en el resumen de confirmación.
+  - La dirección es opcional: si falta, se usa la de la sede donde quiere ser atendido.
+  - Los datos pueden llegar en **uno o varios mensajes**. `preparar_paciente` mezcla lo nuevo con lo ya guardado y devuelve `faltan` con lo que queda por pedir; el agente solo pregunta eso.
+  - Recomendados (se preguntan, no bloquean): sexo, correo.
   - Antes de crear, buscar por teléfono e identidad. Si el teléfono ya existe, no se duplica: se pregunta para quién es la cita o se deriva a recepción.
   - El agente informa el tratamiento de datos y registra la aceptación.
+- **Alcance de la conversación:** el agente solo responde sobre citas, sedes, horarios y los datos de la cita de quien escribe. Rechaza temas ajenos (usuarios, contraseñas, administración, otras personas) y nunca revela ids internos, totales ni listados de la base de datos.
+- **Contexto y ejemplos (few-shot):** `api_agente/contexto.py` contiene pares mensaje del paciente / respuesta esperada que se añaden al prompt en cada llamada. Se editan sin tocar la lógica y no se guardan en la BD.
 - **Tabla de conversaciones:** `ConversacionWhatsApp` y `MensajeWhatsApp` en PostgreSQL, con contenido cifrado y retención configurable (por defecto 90 días).
+- **Atención humana por hilo (06/11/2026):** `ConversacionWhatsApp.agente_activo`. Si una persona escribe desde el WhatsApp de la clínica, el hilo se pausa solo; las respuestas del propio agente se reconocen por `wa_message_id` y no lo pausan. Desde el admin se puede pausar/reactivar. Con el hilo pausado, los mensajes del paciente se guardan pero el agente no responde.
 
 ### 5.3 Audio (notas de voz)
 Flujo: webhook de Evolution → tarea Celery en cola `audio` → descarga del audio (base64, en memoria) → **faster-whisper** (`language="es"`, `vad_filter=True`) → texto → entra al agente como mensaje normal.
@@ -285,3 +294,68 @@ git branch -M main
 git remote add origin <URL_DEL_REPOSITORIO>
 git push -u origin main
 ```
+
+## 15. Estado de implementación (avance real)
+
+> Actualizado: 06/11/2026. Esta sección describe **qué existe ya en el código**, para que quien retome el proyecto no repita trabajo. Lo planificado está arriba; aquí va lo construido y lo que falta.
+
+### 15.1 Puesta en marcha en desarrollo (Windows)
+
+```powershell
+# 1) Infra (PostgreSQL, Redis, Evolution API, MinIO, Mailpit)
+docker compose -f infra/docker-compose.dev.yml up -d
+
+# 2) Backend
+cd backend
+.\.venv\Scripts\python.exe manage.py migrate
+.\.venv\Scripts\python.exe manage.py runserver
+
+# 3) Worker de Celery (otra terminal)
+cd backend
+.\.venv\Scripts\celery.exe -A config worker -Q default,audio --pool=solo -l info
+
+# 4) LLM local (host, fuera de Docker)
+ollama pull llama3.1:8b
+```
+
+- Evolution API: `http://127.0.0.1:8080` (manager en `/manager`, apikey en `infra/.env`). Imagen `evoapicloud/evolution-api:v2.3.7`: las versiones `v2.1.x`/`v2.2.x` de `atendai/evolution-api` ya no existen en Docker Hub o tienen un bucle de reconexión que impide generar el QR.
+- La instancia de WhatsApp se llama `luna-ia` y su webhook apunta a `http://host.docker.internal:8000/api/agente/webhook/evolution/<secreto>/`. El webhook se configura con body anidado en `POST /webhook/set/luna-ia` (`{"webhook": {...}}`); con el body plano devuelve 400.
+- `backend/.env` añade, además de lo de la sección 14.1: `MENSAJES_ENCRYPTION_KEY` (si falta se deriva de `DJANGO_SECRET_KEY`), `EVOLUTION_BASE_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE`, `EVOLUTION_WEBHOOK_SECRET`, `LLM_TIMEOUT_SEGUNDOS=120`.
+
+### 15.2 Qué está implementado
+
+- **ERP previo:** usuarios con 2FA, sedes, pacientes, agenda, servicios, tratamientos, inventario, pagos, documentos, analítica de consulta y auditoría. Dirección del paciente obligatoria en modelo y en BD (`CheckConstraint`).
+- **`api_agente` completo para texto:**
+  - `webhook.py`: valida el secreto de la ruta con `hmac.compare_digest`, ignora grupos y tipos no soportados, deduplica por `wa_message_id` y encola en Celery.
+  - `evolution.py`: `enviar_texto` (devuelve el id del mensaje para reconocer su eco) y `descargar_audio`.
+  - `llm.py`: cliente compatible-OpenAI con `httpx`; todo por `LLM_*`.
+  - `herramientas.py` y `agente.py`: bucle LLM + tools con máximo de 5 iteraciones y 12 mensajes de contexto.
+  - `contexto.py`: ejemplos few-shot que se inyectan al prompt; es el lugar para enseñar respuestas nuevas.
+  - `tasks.py`: `procesar_texto` (agente) y `procesar_audio` (responde que aún no procesa audios).
+  - `cifrado.py`: Fernet para el contenido de los mensajes.
+  - Panel de admin para conversaciones, mensajes y tokens de servicio.
+- **Registro de pacientes:** datos acumulables entre mensajes, fecha en formato hondureño (`DD/MM/AAAA`) o ISO, edad calculada y DNI obligatorio para adultos. Django descarta la fecha o el DNI que el modelo proponga si el paciente no los escribió (guardas `_fecha_mencionada`/`_identidad_mencionada`) y los vuelve a pedir conservando el resto del borrador.
+- **Argumentos del modelo:** las tools validan los ids (`_entero`) antes de consultar; un `sede_id` o `paciente_id` no numérico devuelve error al modelo en vez de romper el worker.
+- **Comando de diagnóstico:** `manage.py probar_llm` prueba el modelo contra 13 frases (incluye fugas de datos y temas ajenos); con `--respuestas` muestra la respuesta final que vería el paciente usando herramientas simuladas (no escribe en la BD).
+- **Tests:** 287 en total, todos en verde (69 de `api_agente`). Cubren webhook, deduplicación, cifrado, borradores, confirmación explícita, aislamiento de pacientes por teléfono, pausa del agente, limpieza de `</think>`, argumentos inválidos y validación del alta de pacientes.
+
+### 15.3 Cómo probar el agente
+
+1. Levantar infra, `runserver` y el worker (reiniciarlo tras cada cambio en `tasks.py`, `agente.py` o `.env`).
+2. Escribir por WhatsApp al número vinculado desde **otro** teléfono.
+3. Frases útiles: `hola`, `¿qué sedes tienen?`, `quiero una cita mañana en San Pedro`, `quiero registrarme, me llamo ...`.
+4. Para tomar el hilo como persona: escribir desde el WhatsApp de la clínica (pausa automática) o usar las acciones del admin. Luego "Reactivar el agente" en el admin.
+5. Prueba sin WhatsApp ni BD: `manage.py probar_llm --respuestas`.
+6. Para enseñar una respuesta nueva: agregar la tupla `(mensaje, respuesta)` en `api_agente/contexto.py`. No hace falta migración ni reiniciar el worker si solo se cambian ejemplos (el módulo se recarga con el proceso; reiniciar el worker si se editó mientras corría).
+
+### 15.4 Límites conocidos y pendientes
+
+- **Audio:** falta integrar `faster-whisper` en `procesar_audio`; hoy responde con un texto de fallback.
+- **Cancelar/modificar citas:** sin tools; el agente deriva a la clínica.
+- **Honorario de las citas creadas por el agente:** se guarda en 0 y el personal lo ajusta después.
+- **Dirección del paciente:** si no la da, se guarda la de la sede (no la suya). Conviene que recepción la corrija.
+- **Asistente interno del ERP (sección 5.4):** no implementado todavía.
+- **Panel de pausa:** solo existe en el admin de Django; falta el botón en el frontend.
+- **Modelo:** `llama3.1:8b` a veces llama una herramienta innecesaria (por ejemplo `listar_sedes` al saludar o `cancelar_accion` ante un dolor). La respuesta final es correcta, pero gasta una llamada extra. Si molesta, filtrar por intención antes de darle tools. También tiende a rellenar huecos con datos inventados: por eso las guardas de Django son la defensa real, no el prompt.
+- **Contexto:** los ejemplos son few-shot en `contexto.py`. No se usa `pgvector`: con decenas de casos no aporta y añade infraestructura. Si algún día hay cientos de políticas o preguntas frecuentes para recuperar, ahí sí conviene RAG con `pgvector`.
+- **Git:** hay cambios sin commitear y el commit `52f36af` no se ha subido a `origin`.

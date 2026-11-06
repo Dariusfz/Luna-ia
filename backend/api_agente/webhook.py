@@ -1,0 +1,112 @@
+import hmac
+import logging
+
+from django.conf import settings
+from django.db import IntegrityError, transaction
+from rest_framework import status
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .cifrado import cifrar
+from .models import ConversacionWhatsApp, MensajeWhatsApp
+from .tasks import procesar_audio, procesar_texto
+
+logger = logging.getLogger(__name__)
+
+EVENTOS_MENSAJE = {"messages.upsert", "messages_upsert"}
+TIPOS_TEXTO = {"conversation", "extendedTextMessage"}
+TIPO_AUDIO = "audioMessage"
+
+
+def _texto_del_mensaje(mensaje: dict) -> str:
+    if "conversation" in mensaje:
+        return mensaje["conversation"]
+    return mensaje.get("extendedTextMessage", {}).get("text", "")
+
+
+def _telefono_desde_jid(jid: str) -> str:
+    return "+" + jid.split("@", 1)[0]
+
+
+class WebhookEvolutionView(APIView):
+    """
+    Recibe eventos de Evolution API. Responde 200 rápido y deja el trabajo a Celery,
+    porque Evolution tiene timeouts y reintenta si no recibe respuesta a tiempo.
+
+    La autenticación es el secreto en la ruta (EVOLUTION_WEBHOOK_SECRET): Evolution v2
+    no firma los webhooks en la versión fijada.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request, secreto):
+        esperado = settings.EVOLUTION_WEBHOOK_SECRET
+        if not esperado or not hmac.compare_digest(secreto, esperado):
+            return Response(status=status.HTTP_404_NOT_FOUND)  # no revelar que la ruta existe
+
+        datos = request.data or {}
+        evento = str(datos.get("event", "")).lower()
+        if evento not in EVENTOS_MENSAJE:
+            return Response(status=status.HTTP_200_OK)
+
+        mensaje_data = datos.get("data") or {}
+        clave = mensaje_data.get("key") or {}
+
+        # Solo chats 1 a 1. Grupos y difusiones se ignoran.
+        jid = clave.get("remoteJid", "")
+        if not jid.endswith("@s.whatsapp.net"):
+            return Response(status=status.HTTP_200_OK)
+
+        wa_id = clave.get("id")
+        from_me = bool(clave.get("fromMe"))
+        mensaje = mensaje_data.get("message") or {}
+        tipo_wa = mensaje_data.get("messageType", "")
+
+        if tipo_wa in TIPOS_TEXTO:
+            tipo, texto = MensajeWhatsApp.Tipo.TEXTO, _texto_del_mensaje(mensaje)
+        elif tipo_wa == TIPO_AUDIO and not from_me:
+            tipo, texto = MensajeWhatsApp.Tipo.AUDIO, ""
+        else:
+            # Imágenes, stickers, ubicaciones y audios de la clínica: el agente no los procesa.
+            return Response(status=status.HTTP_200_OK)
+
+        if not wa_id or (tipo == MensajeWhatsApp.Tipo.TEXTO and not texto.strip()):
+            return Response(status=status.HTTP_200_OK)
+
+        telefono = _telefono_desde_jid(jid)
+        try:
+            with transaction.atomic():
+                conversacion, _ = ConversacionWhatsApp.objects.get_or_create(telefono=telefono)
+                if from_me:
+                    if MensajeWhatsApp.objects.filter(wa_message_id=wa_id).exists():
+                        # Eco de una respuesta del propio agente: no es una intervención humana.
+                        return Response(status=status.HTTP_200_OK)
+                    # Escribió una persona desde el WhatsApp de la clínica: el agente se calla en este hilo.
+                    if conversacion.agente_activo:
+                        conversacion.agente_activo = False
+                        conversacion.save(update_fields=["agente_activo", "ultima_actividad"])
+                    rol = MensajeWhatsApp.Rol.HUMANO
+                else:
+                    rol = MensajeWhatsApp.Rol.PACIENTE
+                registro = MensajeWhatsApp.objects.create(
+                    conversacion=conversacion,
+                    rol=rol,
+                    tipo=tipo,
+                    wa_message_id=wa_id,
+                    contenido_cifrado=cifrar(texto or "[audio]"),
+                )
+        except IntegrityError:
+            # Evolution reenvió el mismo evento: ya está guardado y en cola.
+            logger.info("Mensaje WhatsApp duplicado ignorado: %s", wa_id)
+            return Response(status=status.HTTP_200_OK)
+
+        if from_me or not conversacion.agente_activo:
+            # Mensajes de personal o hilos atendidos por una persona: solo se guardan.
+            return Response(status=status.HTTP_200_OK)
+
+        tarea = procesar_audio if tipo == MensajeWhatsApp.Tipo.AUDIO else procesar_texto
+        # Encolar solo cuando la transacción esté confirmada, para que el worker vea el registro.
+        transaction.on_commit(lambda: tarea.delay(registro.pk))
+        return Response(status=status.HTTP_200_OK)

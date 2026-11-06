@@ -45,7 +45,12 @@ class Paciente(models.Model):
                 fields=["identidad"],
                 condition=~Q(identidad=""),
                 name="uniq_paciente_identidad_no_vacia",
-            )
+            ),
+            # La dirección es obligatoria también a nivel de BD (no solo en formularios).
+            models.CheckConstraint(
+                condition=~Q(direccion=""),
+                name="paciente_direccion_no_vacia",
+            ),
         ]
 
     def __str__(self):

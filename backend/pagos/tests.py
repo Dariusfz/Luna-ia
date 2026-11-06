@@ -35,7 +35,7 @@ class CajaTests(TestCase):
         )
         cls.doctor.sedes.set([cls.sede_a, cls.sede_b])
         cls.tipo = TipoTrabajo.objects.create(nombre="Limpieza", precio=1200)
-        cls.paciente = Paciente.objects.create(
+        cls.paciente = Paciente.objects.create(direccion="Col. Centro", 
             nombres="Ana", apellidos="López", sede_origen=cls.sede_a
         )
         cls.hoy = timezone.localdate()

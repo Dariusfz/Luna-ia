@@ -70,5 +70,6 @@ urlpatterns = [
         name="auth-recuperar-confirmar",
     ),
     path("api/caja/resumen/", ResumenCajaView.as_view(), name="caja-resumen"),
+    path("api/agente/", include("api_agente.urls")),
     path("api/", include(router.urls)),
 ]

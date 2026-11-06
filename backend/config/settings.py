@@ -99,6 +99,18 @@ if not _totp_key:
     ).decode("ascii")
 TOTP_ENCRYPTION_KEY = _totp_key
 TOTP_EMISOR = "LUNA-IA"
+
+# Clave Fernet para cifrar el contenido de los mensajes de WhatsApp (api_agente).
+# Distinta de TOTP_ENCRYPTION_KEY a propósito: rotar una no obliga a rotar la otra.
+_mensajes_key = env("MENSAJES_ENCRYPTION_KEY", default="")
+if not _mensajes_key:
+    import base64 as _b64
+    import hashlib as _hl
+
+    _mensajes_key = _b64.urlsafe_b64encode(
+        _hl.sha256(("mensajes:" + SECRET_KEY).encode("utf-8")).digest()
+    ).decode("ascii")
+MENSAJES_ENCRYPTION_KEY = _mensajes_key
 TWO_FACTOR_PENDIENTE_MINUTOS = 5
 TWO_FACTOR_MAX_INTENTOS = 5
 
@@ -171,6 +183,17 @@ CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ACKS_LATE = True
+# Audio (transcripción y descarga de notas de voz) en cola propia, con concurrencia 1 (GPU compartida).
+CELERY_TASK_DEFAULT_QUEUE = "default"
+CELERY_TASK_ROUTES = {
+    "api_agente.tasks.procesar_audio": {"queue": "audio"},
+}
+
+# WhatsApp: Evolution API (plan §5.2). Solo por entorno.
+EVOLUTION_BASE_URL = env("EVOLUTION_BASE_URL", default="http://127.0.0.1:8080")
+EVOLUTION_API_KEY = env("EVOLUTION_API_KEY", default="")
+EVOLUTION_INSTANCE = env("EVOLUTION_INSTANCE", default="luna-ia")
+EVOLUTION_WEBHOOK_SECRET = env("EVOLUTION_WEBHOOK_SECRET", default="")
 
 
 # Django REST Framework + OpenAPI
@@ -199,6 +222,7 @@ LLM_PROVIDER = env("LLM_PROVIDER", default="ollama")
 LLM_BASE_URL = env("LLM_BASE_URL", default="http://127.0.0.1:11434/v1")
 LLM_API_KEY = env("LLM_API_KEY", default="")
 LLM_MODEL = env("LLM_MODEL", default="qwen3:8b")
+LLM_TIMEOUT_SEGUNDOS = env.int("LLM_TIMEOUT_SEGUNDOS", default=120)
 
 
 # Archivos: en desarrollo local; MinIO (S3) se conecta en la fase de documentos

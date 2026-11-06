@@ -17,8 +17,8 @@ class GestionPacientesTests(TestCase):
         self.admin = Usuario.objects.create_user("admin", password="x-Clave-2026!", rol="admin")
         self.recep = Usuario.objects.create_user("recep", password="x-Clave-2026!", rol="recepcionista")
         self.recep.sedes.set([self.sede_a])
-        self.ana = Paciente.objects.create(nombres="Ana", apellidos="López", sede_origen=self.sede_a)
-        self.beto = Paciente.objects.create(
+        self.ana = Paciente.objects.create(direccion="Col. Centro", nombres="Ana", apellidos="López", sede_origen=self.sede_a)
+        self.beto = Paciente.objects.create(direccion="Col. Centro", 
             nombres="Beto", apellidos="Ramírez", sede_origen=self.sede_b, telefono="+504 9999-0000"
         )
         self.api = APIClient()

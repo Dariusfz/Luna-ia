@@ -28,9 +28,9 @@ class AlcancePorSedeTests(TestCase):
         cls.doctor = Doctor.objects.create(tipo="contratado", nombres="Luis", apellidos="Mejía")
         cls.doctor.sedes.set([cls.sede_a, cls.sede_b])
         cls.tipo = TipoTrabajo.objects.create(nombre="Limpieza")
-        cls.paciente_a = Paciente.objects.create(nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
-        cls.paciente_b = Paciente.objects.create(nombres="Beto", apellidos="B", sede_origen=cls.sede_b)
-        cls.paciente_visitante = Paciente.objects.create(nombres="Carla", apellidos="C")
+        cls.paciente_a = Paciente.objects.create(direccion="Col. Centro", nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
+        cls.paciente_b = Paciente.objects.create(direccion="Col. Centro", nombres="Beto", apellidos="B", sede_origen=cls.sede_b)
+        cls.paciente_visitante = Paciente.objects.create(direccion="Col. Centro", nombres="Carla", apellidos="C")
 
         cls.atencion_a = Atencion.objects.create(
             sede=cls.sede_a, doctor=cls.doctor, paciente=cls.paciente_a, tipo_trabajo=cls.tipo,
@@ -221,15 +221,16 @@ class ChoquesDeAgendaTests(TestCase):
         cls.doctor_solo_b.sedes.set([cls.sede_b])
 
         cls.tipo = TipoTrabajo.objects.create(nombre="Limpieza")
-        cls.paciente = Paciente.objects.create(nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
-        cls.paciente_b = Paciente.objects.create(
+        cls.paciente = Paciente.objects.create(direccion="Col. Centro", nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
+        cls.paciente_b = Paciente.objects.create(direccion="Col. Centro", 
             nombres="Beto", apellidos="B", sede_origen=cls.sede_a
         )
-        cls.paciente_c = Paciente.objects.create(
+        cls.paciente_c = Paciente.objects.create(direccion="Col. Centro", 
             nombres="Carla", apellidos="C", sede_origen=cls.sede_a
         )
 
-        cls.fecha = date(2026, 11, 2)
+        # Fecha futura relativa: las citas pasadas no se pueden crear desde el panel.
+        cls.fecha = timezone.localdate() + timedelta(days=30)
         cls.atencion = Atencion.objects.create(
             sede=cls.sede_a,
             doctor=cls.doctor,
@@ -424,7 +425,7 @@ class DisponibilidadTests(TestCase):
         )
         cls.doctor_solo_b.sedes.set([cls.sede_b])
         cls.tipo = TipoTrabajo.objects.create(nombre="Limpieza")
-        cls.paciente = Paciente.objects.create(nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
+        cls.paciente = Paciente.objects.create(direccion="Col. Centro", nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
         cls.fecha = date(2026, 11, 2)
         Atencion.objects.create(
             sede=cls.sede_a,
@@ -515,7 +516,7 @@ class HorarioSedeTests(TestCase):
         cls.doctor = Doctor.objects.create(tipo="contratado", nombres="Luis", apellidos="Mejía")
         cls.doctor.sedes.set([cls.sede, cls.sede_sin_horario])
         cls.tipo = TipoTrabajo.objects.create(nombre="Limpieza")
-        cls.paciente = Paciente.objects.create(nombres="Ana", apellidos="A", sede_origen=cls.sede)
+        cls.paciente = Paciente.objects.create(direccion="Col. Centro", nombres="Ana", apellidos="A", sede_origen=cls.sede)
 
         for dia in (0, 1):
             HorarioSede.objects.create(
@@ -758,8 +759,8 @@ class ListaEsperaTests(TestCase):
         cls.doctor_b = Doctor.objects.create(tipo="contratado", nombres="Pedro", apellidos="Soto")
         cls.doctor_b.sedes.set([cls.sede_b])
         cls.tipo = TipoTrabajo.objects.create(nombre="Limpieza")
-        cls.paciente = Paciente.objects.create(nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
-        cls.paciente_b = Paciente.objects.create(
+        cls.paciente = Paciente.objects.create(direccion="Col. Centro", nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
+        cls.paciente_b = Paciente.objects.create(direccion="Col. Centro", 
             nombres="Beto", apellidos="B", sede_origen=cls.sede_b
         )
         cls.fecha = date(2027, 2, 1)
@@ -961,7 +962,7 @@ class OrigenAtencionTests(TestCase):
         cls.doctor = Doctor.objects.create(tipo="contratado", nombres="Luis", apellidos="Mejía")
         cls.doctor.sedes.set([cls.sede_a, cls.sede_b])
         cls.tipo = TipoTrabajo.objects.create(nombre="Limpieza")
-        cls.paciente = Paciente.objects.create(nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
+        cls.paciente = Paciente.objects.create(direccion="Col. Centro", nombres="Ana", apellidos="A", sede_origen=cls.sede_a)
         cls.fecha = timezone.localdate() + timedelta(days=30)
 
     def setUp(self):
