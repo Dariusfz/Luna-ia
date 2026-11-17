@@ -29,6 +29,30 @@ def _telefono_desde_jid(jid: str) -> str:
     return "+" + jid.split("@", 1)[0]
 
 
+def _jid_del_contacto(clave: dict) -> str:
+    """WhatsApp puede entregar el chat como @lid (linked ID); el teléfono real
+    viene en remoteJidAlt. Se prefiere ese JID para guardar y responder."""
+    jid = clave.get("remoteJid", "")
+    if jid.endswith("@lid"):
+        alterno = clave.get("remoteJidAlt", "")
+        if alterno.endswith("@s.whatsapp.net"):
+            return alterno
+    return jid
+
+
+def _es_numero_admin(telefono: str) -> bool:
+    """True si el remitente es uno de los números configurados como administrador.
+
+    Esos números son de uso humano: si escriben, el agente se pausa. Para que el
+    agente vuelva a responder hay que reactivarlo manualmente desde el admin.
+    """
+    digitos = "".join(c for c in telefono if c.isdigit())
+    if not digitos:
+        return False
+    crudos = (getattr(settings, "ADMIN_WHATSAPP", "") or "").split(",")
+    return any("".join(c for c in numero if c.isdigit()) == digitos for numero in crudos)
+
+
 class WebhookEvolutionView(APIView):
     """
     Recibe eventos de Evolution API. Responde 200 rápido y deja el trabajo a Celery,
@@ -55,7 +79,7 @@ class WebhookEvolutionView(APIView):
         clave = mensaje_data.get("key") or {}
 
         # Solo chats 1 a 1. Grupos y difusiones se ignoran.
-        jid = clave.get("remoteJid", "")
+        jid = _jid_del_contacto(clave)
         if not jid.endswith("@s.whatsapp.net"):
             return Response(status=status.HTTP_200_OK)
 
@@ -89,7 +113,15 @@ class WebhookEvolutionView(APIView):
                         conversacion.save(update_fields=["agente_activo", "ultima_actividad"])
                     rol = MensajeWhatsApp.Rol.HUMANO
                 else:
-                    rol = MensajeWhatsApp.Rol.PACIENTE
+                    if _es_numero_admin(telefono):
+                        # El administrador escribió: el hilo pasa a atención humana.
+                        # Solo se reactiva manualmente desde el admin.
+                        if conversacion.agente_activo:
+                            conversacion.agente_activo = False
+                            conversacion.save(update_fields=["agente_activo", "ultima_actividad"])
+                        rol = MensajeWhatsApp.Rol.HUMANO
+                    else:
+                        rol = MensajeWhatsApp.Rol.PACIENTE
                 registro = MensajeWhatsApp.objects.create(
                     conversacion=conversacion,
                     rol=rol,

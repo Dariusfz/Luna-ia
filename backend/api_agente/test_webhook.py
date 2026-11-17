@@ -34,7 +34,7 @@ def evento(texto="Hola", *, jid=JID, from_me=False, wa_id="MSG1", tipo_wa="conve
     }
 
 
-@override_settings(EVOLUTION_WEBHOOK_SECRET=SECRETO)
+@override_settings(EVOLUTION_WEBHOOK_SECRET=SECRETO, ADMIN_WHATSAPP="")
 class WebhookEvolutionTests(TestCase):
     def setUp(self):
         self.api = APIClient()
@@ -95,6 +95,23 @@ class WebhookEvolutionTests(TestCase):
         self.assertEqual(descifrar(mensaje.contenido_cifrado), "Hola, soy Marta de la clínica")
         self.delay_texto.assert_not_called()
 
+    @override_settings(ADMIN_WHATSAPP="+50494165195")
+    def test_el_numero_del_administrador_pausa_el_agente_al_escribir(self):
+        telefono_admin = "+50494165195"
+        ConversacionWhatsApp.objects.create(telefono=telefono_admin, agente_activo=True)
+        with self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.api.post(
+                URL,
+                evento("Hola, escribo como administrador", jid="50494165195@s.whatsapp.net", wa_id="ADM1"),
+                format="json",
+            )
+        self.assertEqual(respuesta.status_code, 200)
+        conversacion = ConversacionWhatsApp.objects.get(telefono=telefono_admin)
+        self.assertFalse(conversacion.agente_activo)
+        mensaje = conversacion.mensajes.get(wa_message_id="ADM1")
+        self.assertEqual(mensaje.rol, MensajeWhatsApp.Rol.HUMANO)
+        self.delay_texto.assert_not_called()
+
     def test_con_el_hilo_pausado_el_paciente_se_guarda_sin_responder(self):
         ConversacionWhatsApp.objects.create(telefono=TELEFONO, agente_activo=False)
         with self.captureOnCommitCallbacks(execute=True):
@@ -116,6 +133,26 @@ class WebhookEvolutionTests(TestCase):
         with self.captureOnCommitCallbacks(execute=True):
             self.api.post(URL, evento(jid="120363@g.us"), format="json")
             self.api.post(URL, evento(jid="status@broadcast", wa_id="B"), format="json")
+        self.assertFalse(MensajeWhatsApp.objects.exists())
+
+    def test_mensaje_con_lid_usa_el_telefono_alterno(self):
+        datos = evento("Hola desde LID", wa_id="LID1")
+        datos["data"]["key"]["remoteJid"] = "75574412374121@lid"
+        datos["data"]["key"]["remoteJidAlt"] = JID
+        with self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.api.post(URL, datos, format="json")
+        self.assertEqual(respuesta.status_code, 200)
+        conversacion = ConversacionWhatsApp.objects.get(telefono=TELEFONO)
+        mensaje = conversacion.mensajes.get(wa_message_id="LID1")
+        self.assertEqual(mensaje.rol, MensajeWhatsApp.Rol.PACIENTE)
+        self.assertEqual(descifrar(mensaje.contenido_cifrado), "Hola desde LID")
+        self.delay_texto.assert_called_once_with(mensaje.pk)
+
+    def test_lid_sin_telefono_alterno_se_ignora(self):
+        datos = evento("Hola desde LID", wa_id="LID2")
+        datos["data"]["key"]["remoteJid"] = "75574412374121@lid"
+        respuesta = self.api.post(URL, datos, format="json")
+        self.assertEqual(respuesta.status_code, 200)
         self.assertFalse(MensajeWhatsApp.objects.exists())
 
     def test_audio_se_encola_como_audio(self):

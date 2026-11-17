@@ -5,12 +5,14 @@ Todos los valores sensibles o dependientes del entorno se leen de variables
 de entorno (o de backend/.env en desarrollo). Ver backend/.env.example.
 """
 
+import sys
 from datetime import timedelta
 from pathlib import Path
 
 import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+TESTING = "test" in sys.argv
 
 env = environ.Env(
     DJANGO_DEBUG=(bool, False),
@@ -195,6 +197,12 @@ EVOLUTION_API_KEY = env("EVOLUTION_API_KEY", default="")
 EVOLUTION_INSTANCE = env("EVOLUTION_INSTANCE", default="luna-ia")
 EVOLUTION_WEBHOOK_SECRET = env("EVOLUTION_WEBHOOK_SECRET", default="")
 
+# Número(s) de WhatsApp que reciben los avisos internos del agente (citas nuevas,
+# tratamientos no disponibles). Separados por coma. Vacío = no se envía nada.
+ADMIN_WHATSAPP = env("ADMIN_WHATSAPP", default="")
+# Interruptor general de esos avisos. En tests se apaga para no enviar mensajes reales.
+NOTIFICACIONES_WHATSAPP = env.bool("NOTIFICACIONES_WHATSAPP", default=not TESTING)
+
 
 # Django REST Framework + OpenAPI
 REST_FRAMEWORK = {
@@ -223,6 +231,8 @@ LLM_BASE_URL = env("LLM_BASE_URL", default="http://127.0.0.1:11434/v1")
 LLM_API_KEY = env("LLM_API_KEY", default="")
 LLM_MODEL = env("LLM_MODEL", default="qwen3:8b")
 LLM_TIMEOUT_SEGUNDOS = env.int("LLM_TIMEOUT_SEGUNDOS", default=120)
+LLM_REINTENTOS_429 = env.int("LLM_REINTENTOS_429", default=2)
+LLM_USER_AGENT = env("LLM_USER_AGENT", default="LUNA-IA/1.0")
 
 
 # Archivos: en desarrollo local; MinIO (S3) se conecta en la fase de documentos

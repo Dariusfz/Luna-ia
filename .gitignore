@@ -6,6 +6,10 @@
 backend/.env
 infra/.env
 
+# Credenciales locales (nunca subir)
+claveApiVertex.json
+*service-account*.json
+
 # Python / Django
 backend/.venv/
 .venv/

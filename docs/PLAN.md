@@ -76,8 +76,12 @@ LLM_MODEL=llama3.1:8b                   # dev; en prod el modelo de la API
 ### 5.2 Agente de WhatsApp (Django)
 - Orquestación en `api_agente`: el webhook de Evolution llama a Django, que encola el procesamiento en Celery, ejecuta el LLM con tools y responde por Evolution API.
 - **Decisión 05/11/2026 — el agente corre en el mismo proceso Django.** Las tools usan serializers y modelos directamente (nunca SQL libre ni escritura sin validar); no hacen llamadas HTTP. El modelo `TokenServicio` queda solo para consumidores externos de `/api/agente/`, no para el flujo interno.
-- **Tools implementadas (06/11/2026):** `listar_sedes`, `consultar_disponibilidad`, `consultar_mis_pacientes`, `listar_mis_citas`, `seleccionar_paciente`, `preparar_paciente`, `preparar_cita`, `confirmar_accion`, `cancelar_accion`.
-- **Tools pendientes:** `modificar_cita` y `cancelar_cita` sobre citas ya creadas. Mientras no existan, el agente dice que no puede cancelar ni cambiar y pide llamar a la clínica.
+- **Tools implementadas (09/11/2026):** `listar_sedes`, `consultar_disponibilidad`, `consultar_mis_pacientes`, `listar_mis_citas`, `seleccionar_paciente`, `preparar_paciente`, `preparar_cita`, `preparar_cancelacion_cita`, `preparar_modificacion_cita`, `confirmar_accion`, `cancelar_accion`, `consultar_tratamientos`, `solicitar_revision_administrador`.
+- **Cancelar y modificar citas (09/11/2026):** el agente solo opera sobre citas futuras del paciente que escribe (`_cita_del_paciente`). Igual que al crear, `preparar_*` deja un borrador y `confirmar_accion` exige una afirmación explícita del paciente. La cancelación cambia el estado a `cancelada` y la modificación reutiliza `AtencionSerializer` (valida sede, doctor, horario y choques).
+- **Flujo de tratamiento:** al pedir una cita, el agente pregunta primero qué tratamiento necesita, consulta el catálogo con `consultar_tratamientos` y da el precio de referencia. Si no existe, no agenda: informa que no está disponible y llama a `solicitar_revision_administrador`, que avisa al administrador. El tratamiento se recuerda durante toda la conversación: `preparar_cita` lo valida contra todos los mensajes del paciente, no solo los últimos 3, para que no se pierda mientras se elige sede, día y hora.
+- **Consultar/confirmar una cita (09/11/2026):** si el paciente pide los datos de su cita o no recuerda la fecha, `listar_mis_citas` los devuelve. Si el número tiene **un solo paciente registrado**, la tool lo selecciona automáticamente (antes exigía `seleccionar_paciente` y el agente podía quedarse sin responder).
+- **Números del administrador (09/11/2026):** los avisos enviados a `ADMIN_WHATSAPP` se guardan con rol `SISTEMA`, así su eco no pausa el hilo. Esos números son de uso humano: **si el administrador escribe, el agente se pausa** y solo se reactiva manualmente desde el admin. Se avisa al crear, modificar y cancelar una cita (y cuando falta un tratamiento). La fecha se envía con el día de la semana, por ejemplo `lunes 16/11/2026 a las 08:30`.
+- **Confirmaciones simples (09/11/2026):** si el último mensaje del paciente es una afirmación corta (`si`, `sí`, `sip`, `claro`, `correcto`, `confirmo`, `ok`, `dale`, `de acuerdo`, `está bien`, `perfecto`, con o sin tilde), `agente.responder` ejecuta `confirmar_accion` en código, sin pasar por el modelo. Así un "si" sin acento no se interpreta como ambiguo ni el agente vuelve a preguntar.
 - **Crear o agendar es en dos pasos:** `preparar_*` guarda un borrador en `ConversacionWhatsApp.borrador`; `confirmar_accion` solo actúa si el último mensaje del paciente es afirmativo (se valida en código con una expresión regular, no en el prompt).
 - **Todas las sedes:** el token de servicio puede consultar y agendar en cualquiera de las 3 sedes. La sede es argumento obligatorio; si el paciente no la menciona, el agente la pregunta antes de agendar.
 - **Un solo número de WhatsApp** para las 3 sedes. El paciente se identifica por el teléfono del remitente; el LLM **nunca** elige el `paciente_id`: lo toma la capa de tools desde la conversación.
@@ -85,7 +89,8 @@ LLM_MODEL=llama3.1:8b                   # dev; en prod el modelo de la API
 - **Reglas de negocio y permisos viven en Django**, no en el prompt.
 - **Creación de pacientes por WhatsApp (06/11/2026):**
   - Obligatorios: nombres, apellidos, fecha de nacimiento y sede. El teléfono lo aporta la conversación.
-  - **DNI (identidad):** obligatorio para mayores de 18 años; opcional para menores, que se registran a nombre de un tutor. Se normaliza a 13 dígitos y es único cuando existe.
+  - **Un mismo número puede tener varios pacientes (familiares).** `preparar_paciente` ya no bloquea el alta si el número ya tiene un paciente; se rechazan duplicados por DNI o por nombre+fecha. Para agendar a un familiar hay que confirmar primero su alta.
+  - **DNI (identidad):** obligatorio para mayores de 18 años; opcional para menores, que se registran a nombre de un tutor. Se normaliza a 13 dígitos y es único cuando existe. Se valida un formato básico (departamento 01-18, no todo ceros). El año del DNI **no** se compara con la fecha de nacimiento: puede corresponder al trámite, por ejemplo un cambio de nombre hecho años después de nacer.
   - La **edad no se guarda**: se calcula desde la fecha de nacimiento y se muestra en el resumen de confirmación.
   - La dirección es opcional: si falta, se usa la de la sede donde quiere ser atendido.
   - Los datos pueden llegar en **uno o varios mensajes**. `preparar_paciente` mezcla lo nuevo con lo ya guardado y devuelve `faltan` con lo que queda por pedir; el agente solo pregunta eso.
@@ -337,7 +342,7 @@ ollama pull llama3.1:8b
 - **Registro de pacientes:** datos acumulables entre mensajes, fecha en formato hondureño (`DD/MM/AAAA`) o ISO, edad calculada y DNI obligatorio para adultos. Django descarta la fecha o el DNI que el modelo proponga si el paciente no los escribió (guardas `_fecha_mencionada`/`_identidad_mencionada`) y los vuelve a pedir conservando el resto del borrador.
 - **Argumentos del modelo:** las tools validan los ids (`_entero`) antes de consultar; un `sede_id` o `paciente_id` no numérico devuelve error al modelo en vez de romper el worker.
 - **Comando de diagnóstico:** `manage.py probar_llm` prueba el modelo contra 13 frases (incluye fugas de datos y temas ajenos); con `--respuestas` muestra la respuesta final que vería el paciente usando herramientas simuladas (no escribe en la BD).
-- **Tests:** 287 en total, todos en verde (69 de `api_agente`). Cubren webhook, deduplicación, cifrado, borradores, confirmación explícita, aislamiento de pacientes por teléfono, pausa del agente, limpieza de `</think>`, argumentos inválidos y validación del alta de pacientes.
+- **Tests:** 337 en total, todos en verde (119 de `api_agente`). Cubren webhook, deduplicación, cifrado, borradores, confirmación explícita, aislamiento de pacientes por teléfono, pausa del agente, limpieza de ` thinking`, argumentos inválidos, alta de pacientes, cancelación/modificación de citas y avisos al administrador.
 
 ### 15.3 Cómo probar el agente
 
@@ -351,7 +356,7 @@ ollama pull llama3.1:8b
 ### 15.4 Límites conocidos y pendientes
 
 - **Audio:** falta integrar `faster-whisper` en `procesar_audio`; hoy responde con un texto de fallback.
-- **Cancelar/modificar citas:** sin tools; el agente deriva a la clínica.
+- **Notificaciones internas:** `api_agente/notificaciones.py` avisa por WhatsApp al número de `ADMIN_WHATSAPP` cuando el agente crea, modifica o cancela una cita, o cuando el paciente pide un tratamiento fuera del catálogo. Es informativo: si el envío falla, la acción del paciente no se interrumpe. Los recordatorios programados seguirán en n8n.
 - **Honorario de las citas creadas por el agente:** se guarda en 0 y el personal lo ajusta después.
 - **Dirección del paciente:** si no la da, se guarda la de la sede (no la suya). Conviene que recepción la corrija.
 - **Asistente interno del ERP (sección 5.4):** no implementado todavía.

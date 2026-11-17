@@ -105,9 +105,12 @@ class BucleDelAgenteTests(AgenteBase):
 
     def test_limite_de_iteraciones_devuelve_respuesta_segura(self):
         self.mensaje_paciente("bucle")
-        resultado, chat = self.responder_con([llamar("listar_sedes")] * agente.MAX_ITERACIONES)
-        self.assertEqual(resultado, agente.RESPUESTA_FALLO)
-        self.assertEqual(chat.call_count, agente.MAX_ITERACIONES)
+        resultado, chat = self.responder_con(
+            [llamar("listar_sedes")] * agente.MAX_ITERACIONES + [texto("¿Qué dato le falta?")]
+        )
+        self.assertEqual(resultado, "¿Qué dato le falta?")
+        self.assertEqual(chat.call_count, agente.MAX_ITERACIONES + 1)
+        self.assertEqual(chat.call_args.args[1], [])
 
     def test_fallo_del_llm_devuelve_respuesta_segura(self):
         self.mensaje_paciente("hola")
@@ -144,15 +147,16 @@ class PacientesDelRemitenteTests(AgenteBase):
         self.conversacion.refresh_from_db()
         self.assertIsNone(self.conversacion.paciente)
 
-    def test_no_crea_paciente_si_el_numero_ya_tiene_uno(self):
+    def test_permite_preparar_un_segundo_paciente_para_el_mismo_numero(self):
         self.paciente_del_remitente()
-        self.mensaje_paciente("quiero registrarme")
+        self.mensaje_paciente("quiero registrar a mi hijo")
         _, chat = self.responder_con([
             llamar("preparar_paciente", {"nombres": "Rosa", "apellidos": "Mejía", "sede_id": self.sede.pk}),
             texto("x"),
         ])
-        self.assertIn("error", self.contenido_de_herramienta(chat))
-        self.assertEqual(Paciente.objects.filter(nombres="Rosa").count(), 0)
+        resultado = self.contenido_de_herramienta(chat)["resultado"]
+        self.assertIn("faltan", resultado)
+        self.assertFalse(Paciente.objects.filter(nombres="Rosa").exists())
 
 
 class ConfirmacionTests(AgenteBase):
@@ -160,7 +164,7 @@ class ConfirmacionTests(AgenteBase):
         paciente = self.paciente_del_remitente()
         self.conversacion.paciente = paciente
         self.conversacion.save()
-        self.mensaje_paciente("quiero cita mañana")
+        self.mensaje_paciente("quiero una limpieza mañana")
         herramienta = herramientas.Herramientas(self.conversacion)
         herramienta.preparar_cita({
             "sede_id": self.sede.pk, "doctor_id": self.doctor.pk,
@@ -176,7 +180,7 @@ class ConfirmacionTests(AgenteBase):
         paciente = self.paciente_del_remitente()
         self.conversacion.paciente = paciente
         self.conversacion.save()
-        self.mensaje_paciente("quiero cita mañana a las 10")
+        self.mensaje_paciente("quiero una limpieza mañana a las 10")
         herramienta = herramientas.Herramientas(self.conversacion)
         herramienta.preparar_cita({
             "sede_id": self.sede.pk, "doctor_id": self.doctor.pk,
@@ -185,7 +189,8 @@ class ConfirmacionTests(AgenteBase):
         self.mensaje_paciente("sí, confirmo")
 
         resultado, chat = self.responder_con([llamar("confirmar_accion"), texto("Listo, cita agendada.")])
-        self.assertEqual(resultado, "Listo, cita agendada.")
+        self.assertIn("agendada", resultado)
+        chat.assert_not_called()
         cita = Atencion.objects.get()
         self.assertEqual(cita.origen, Atencion.Origen.AGENTE_WHATSAPP)
         self.assertEqual(cita.paciente, paciente)
@@ -193,6 +198,43 @@ class ConfirmacionTests(AgenteBase):
         self.assertEqual(cita.hora_fin.strftime("%H:%M"), "10:20")
         self.conversacion.refresh_from_db()
         self.assertEqual(self.conversacion.borrador, {})
+
+    def test_si_el_modelo_no_termina_se_muestra_el_resumen_pendiente(self):
+        self.conversacion.borrador = {
+            "tipo": "cita", "datos": {}, "resumen": "Cita para Ana el 14/11 a las 09:20",
+            "creado": timezone.now().isoformat(),
+        }
+        self.conversacion.estado = ConversacionWhatsApp.Estado.ESPERANDO_CONFIRMACION
+        self.conversacion.save()
+        self.mensaje_paciente("ayuda con la cita")
+        bucle = [llamar("listar_sedes", id_llamada=f"c{i}") for i in range(agente.MAX_ITERACIONES + 2)]
+        resultado, _ = self.responder_con(bucle)
+        self.assertIn("Cita para Ana el 14/11 a las 09:20", resultado)
+        self.assertIn("Responda sí o no", resultado)
+
+    def test_cita_sin_doctor_asigna_uno_libre_cuando_es_cualquiera(self):
+        paciente = self.paciente_del_remitente()
+        self.conversacion.paciente = paciente
+        self.conversacion.save()
+        otro = Doctor.objects.create(tipo="contratado", nombres="Ana", apellidos="Ruiz")
+        otro.sedes.set([self.sede])
+        ocupante = Paciente.objects.create(
+            nombres="Pedro", apellidos="Gómez", telefono="+504 8888-8888",
+            direccion="Col. Centro", sede_origen=self.sede,
+        )
+        Atencion.objects.create(
+            sede=self.sede, doctor=self.doctor, paciente=ocupante, tipo_trabajo=self.tipo,
+            fecha=timezone.localdate() + timedelta(days=1),
+            hora_inicio="10:00", hora_fin="10:20",
+        )
+        self.mensaje_paciente("quiero una limpieza")
+        herramienta = herramientas.Herramientas(self.conversacion)
+        resultado = herramienta.preparar_cita({
+            "sede_id": self.sede.pk, "tipo_trabajo_id": self.tipo.pk,
+            "fecha": self.manana, "hora_inicio": "10:00",
+        })
+        self.assertIn("pendiente_confirmacion", resultado)
+        self.assertEqual(self.conversacion.borrador["datos"]["doctor"], otro.pk)
 
     def test_cita_con_choque_de_horario_se_rechaza_al_preparar(self):
         paciente = self.paciente_del_remitente()
@@ -224,7 +266,7 @@ class ConfirmacionTests(AgenteBase):
             }),
             texto("¿Para quién es la cita?"),
         ])
-        self.assertIn("seleccionar_paciente", self.contenido_de_herramienta(chat)["error"])
+        self.assertIn("registrar", self.contenido_de_herramienta(chat)["error"])
 
 
 class AltaDePacienteTests(AgenteBase):
@@ -408,6 +450,7 @@ class SeguridadTests(AgenteBase):
         paciente = self.paciente_del_remitente()
         self.conversacion.paciente = paciente
         self.conversacion.save()
+        self.mensaje_paciente("quiero una limpieza")
         herramientas.Herramientas(self.conversacion).preparar_cita({
             "sede_id": self.sede.pk, "doctor_id": self.doctor.pk,
             "tipo_trabajo_id": self.tipo.pk, "fecha": self.manana, "hora_inicio": "10:00",

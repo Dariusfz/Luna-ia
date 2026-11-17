@@ -29,6 +29,18 @@ def _responder(mensaje: MensajeWhatsApp, texto: str) -> None:
     )
 
 
+def _ultimo_mensaje_es_del_paciente(conversacion) -> bool:
+    """El LLM no acepta historiales que terminan en un turno del agente (tareas atrasadas)."""
+    ultimo = (
+        MensajeWhatsApp.objects.filter(conversacion=conversacion)
+        .exclude(rol=MensajeWhatsApp.Rol.SISTEMA)
+        .order_by("-creado", "-pk")
+        .values_list("rol", flat=True)
+        .first()
+    )
+    return ultimo == MensajeWhatsApp.Rol.PACIENTE
+
+
 @shared_task(
     bind=True,
     autoretry_for=(evolution.EvolutionError, httpx.HTTPError),
@@ -40,6 +52,12 @@ def procesar_texto(self, mensaje_id: int) -> None:
     if not mensaje.conversacion.agente_activo:
         # Una persona tomó el hilo mientras el mensaje esperaba en cola.
         logger.info("Conversación %s atendida por personal; no se responde", mensaje.conversacion_id)
+        return
+    if not _ultimo_mensaje_es_del_paciente(mensaje.conversacion):
+        logger.info(
+            "El mensaje %s ya no es el último de la conversación %s; se omite",
+            mensaje.pk, mensaje.conversacion_id,
+        )
         return
     logger.info("Procesando mensaje %s de la conversación %s", mensaje_id, mensaje.conversacion_id)
     respuesta = agente.responder(mensaje.conversacion)
@@ -59,5 +77,11 @@ def procesar_audio(self, mensaje_id: int) -> None:
     """
     mensaje = MensajeWhatsApp.objects.select_related("conversacion").get(pk=mensaje_id)
     if not mensaje.conversacion.agente_activo:
+        return
+    if not _ultimo_mensaje_es_del_paciente(mensaje.conversacion):
+        logger.info(
+            "El mensaje %s ya no es el último de la conversación %s; se omite",
+            mensaje.pk, mensaje.conversacion_id,
+        )
         return
     _responder(mensaje, RESPUESTA_AUDIO_NO_DISPONIBLE)

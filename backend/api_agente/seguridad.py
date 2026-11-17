@@ -9,11 +9,12 @@ Reglas de seguridad del agente que se aplican en código, no en el prompt.
 """
 
 import re
+import unicodedata
 
 # ---- confirmación explícita -------------------------------------------------
 
 AFIRMATIVO = re.compile(
-    r"\b(s[ií]|confirmo|confirmado|correcto|dale|ok|okay|de acuerdo|est[aá] bien|perfecto)\b",
+    r"\b(s[ií]+|sip|claro|confirmo|confirmado|correcto|dale|ok|okay|de acuerdo|est[aá] bien|perfecto)\b",
     re.IGNORECASE,
 )
 
@@ -32,6 +33,50 @@ def es_afirmativo(texto: str) -> bool:
 def es_negacion(texto: str) -> bool:
     limpio = (texto or "").strip().lower()
     return limpio in SOLO_NO or bool(NEGACION.search(limpio))
+
+
+# Frases que, por sí solas, son una confirmación clara. Se comparan sin tildes
+# ni signos: "si", "sí", "sip", "claro", "correcto", "esta bien", etc.
+_TOKENS_AFIRMATIVOS = {
+    "si", "sip", "claro", "correcto", "confirmo", "confirmado", "ok", "okay",
+    "dale", "perfecto", "adelante", "exacto", "seguro", "afirmativo", "yes",
+    "obvio", "de", "acuerdo", "esta", "bien", "asi", "es", "por", "favor",
+    "gracias", "muchas", "senor", "senora", "que", "muy",
+}
+_INICIO_AFIRMATIVO = {
+    "si", "sip", "claro", "correcto", "confirmo", "confirmado", "ok", "okay",
+    "dale", "perfecto", "adelante", "exacto", "seguro", "afirmativo", "yes",
+    "obvio", "bien", "esta", "de", "asi", "muy",
+}
+
+
+def _normalizar(texto: str) -> str:
+    descompuesto = unicodedata.normalize("NFD", (texto or "").lower())
+    sin_tildes = "".join(c for c in descompuesto if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-zñ\s]", " ", sin_tildes).strip()
+
+
+def _token_afirmativo(token: str) -> bool:
+    return token in _TOKENS_AFIRMATIVOS or bool(re.fullmatch(r"si+i*", token))
+
+
+def es_confirmacion_simple(texto: str) -> bool:
+    """True si el mensaje es solo una frase afirmativa ("si", "sí", "claro", "ok"...).
+
+    Se usa para confirmar sin depender del modelo: la gente suele escribir "si"
+    sin tilde y el LLM lo interpretaba como ambiguo y volvía a preguntar.
+    """
+    normalizado = _normalizar(texto)
+    if not normalizado:
+        return False
+    if normalizado in ("por supuesto", "por supuesto que si"):
+        return True
+    tokens = normalizado.split()
+    if not tokens or not (
+        tokens[0] in _INICIO_AFIRMATIVO or re.fullmatch(r"si+i*", tokens[0])
+    ):
+        return False
+    return all(_token_afirmativo(token) for token in tokens)
 
 
 # ---- respuestas fijas -------------------------------------------------------

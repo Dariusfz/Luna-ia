@@ -9,7 +9,10 @@ Reglas de seguridad (plan §5.2):
   paciente en su último mensaje (comprobado en código, no en el prompt).
 """
 
+import difflib
+import logging
 import re
+import unicodedata
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -26,9 +29,12 @@ from sedes.models import Sede
 from servicios.models import TipoTrabajo
 from users.models import Doctor
 
+from . import notificaciones
 from .cifrado import descifrar
 from .models import ConversacionWhatsApp, MensajeWhatsApp, TokenServicio
 from .seguridad import es_afirmativo
+
+logger = logging.getLogger(__name__)
 
 DURACION_CITA_MINUTOS = 20
 EDAD_ADULTO = 18
@@ -74,12 +80,20 @@ def _fecha_nacimiento(texto):
 
 
 def _identidad(texto) -> str:
-    """Devuelve el DNI solo con dígitos. Vacío si no se dio."""
+    """Devuelve el DNI solo con dígitos. Vacío si no se dio.
+
+    Honduras usa 13 dígitos con formato DDMM-AAAA-NNNNN (departamento, municipio,
+    año y secuencia). Se rechazan patrones obvios de prueba como 0000-0000-00003.
+    El año del DNI no se compara con la fecha de nacimiento: puede corresponder al
+    trámite (por ejemplo, un cambio de nombre hecho años después de nacer).
+    """
     digitos = _digitos(str(texto or ""))
     if not digitos:
         return ""
     if len(digitos) != 13:
         raise ErrorHerramienta("El DNI debe tener 13 dígitos.")
+    if len(set(digitos)) == 1 or not (1 <= int(digitos[:2]) <= 18):
+        raise ErrorHerramienta("El número de identidad no es válido.")
     return digitos
 
 
@@ -115,6 +129,27 @@ def _fecha_mencionada(textos, fecha) -> bool:
 
 def _identidad_mencionada(textos, identidad) -> bool:
     return any(identidad in _digitos(texto) for texto in textos)
+
+
+def _sin_acentos(texto: str) -> str:
+    descompuesto = unicodedata.normalize("NFD", texto.lower())
+    return "".join(c for c in descompuesto if unicodedata.category(c) != "Mn")
+
+
+def _tratamiento_mencionado(textos, nombre: str) -> bool:
+    """True si el paciente nombró alguna palabra significativa del tratamiento, tolerando
+    errores de escritura ('estraccion' para 'Extraccion'). Evita elegir uno que no pidió."""
+    palabras = [p for p in re.findall(r"[a-zñ]+", _sin_acentos(nombre)) if len(p) >= 5]
+    if not palabras:
+        return True
+    dichas = re.findall(r"[a-zñ]+", _sin_acentos(" ".join(textos)))
+    for palabra in palabras:
+        for dicha in dichas:
+            if len(dicha) < 4:
+                continue
+            if palabra.startswith(dicha) or difflib.SequenceMatcher(None, palabra, dicha).ratio() >= 0.8:
+                return True
+    return False
 
 
 class Herramientas:
@@ -162,13 +197,57 @@ class Herramientas:
             telefono=_formato_telefono_erp(self.conversacion.telefono), activo=True
         )
 
+    def _paciente_de_la_conversacion(self) -> Paciente:
+        """Paciente del hilo. Si no está elegido y el número solo tiene uno, lo toma solo.
+
+        Evita que el agente se quede sin responder cuando el paciente pregunta por
+        su cita y el hilo no tenía un paciente seleccionado explícitamente.
+        """
+        if self.conversacion.paciente_id:
+            return self.conversacion.paciente
+        pacientes = list(self._pacientes_del_remitente()[:2])
+        if len(pacientes) == 1:
+            self.conversacion.paciente = pacientes[0]
+            self.conversacion.save(update_fields=["paciente", "ultima_actividad"])
+            return pacientes[0]
+        if not pacientes:
+            raise ErrorHerramienta(
+                "No hay pacientes registrados con este número. Pregunta si desea registrar uno nuevo "
+                "(preparar_paciente)."
+            )
+        raise ErrorHerramienta(
+            "Hay varios pacientes registrados con este número. Pregunta para cuál es la consulta y usa "
+            "consultar_mis_pacientes y seleccionar_paciente."
+        )
+
+    def _citas_activas_del_paciente(self):
+        """Citas futuras y activas del paciente de esta conversación (nunca de otro)."""
+        paciente = self._paciente_de_la_conversacion()
+        return Atencion.objects.filter(
+            paciente=paciente,
+            fecha__gte=timezone.localdate(),
+            estado__in=ESTADOS_QUE_OCUPAN,
+        ).select_related("sede", "doctor", "tipo_trabajo")
+
+    def _cita_del_paciente(self, cita_id) -> Atencion:
+        cita_id = self._entero(cita_id)
+        cita = (
+            self._citas_activas_del_paciente().filter(pk=cita_id).first()
+            if cita_id else None
+        )
+        if cita is None:
+            raise ErrorHerramienta(
+                "Esa cita no existe, ya pasó o no pertenece al paciente. Consulta listar_mis_citas."
+            )
+        return cita
+
     def _ultimo_mensaje_paciente(self):
         """Último mensaje del paciente (objeto), o None. Se usa para validar la confirmación."""
         return (
             MensajeWhatsApp.objects.filter(
                 conversacion=self.conversacion, rol=MensajeWhatsApp.Rol.PACIENTE
             )
-            .order_by("-creado")
+            .order_by("-creado", "-pk")
             .first()
         )
 
@@ -188,11 +267,15 @@ class Herramientas:
         return datos
 
     def _guardar_borrador(self, tipo: str, datos: dict, resumen: str):
+        ultimo = self._ultimo_mensaje_paciente()
         self.conversacion.borrador = {
             "tipo": tipo,
             "datos": datos,
             "resumen": resumen,
             "creado": timezone.now().isoformat(),
+            # Id del último mensaje al preparar: la confirmación debe ser uno posterior.
+            # El id es más fiable que la hora (relojes con poca resolución).
+            "ultimo_mensaje_id": ultimo.pk if ultimo else None,
         }
         self.conversacion.estado = ConversacionWhatsApp.Estado.ESPERANDO_CONFIRMACION
         self.conversacion.save(update_fields=["borrador", "estado", "ultima_actividad"])
@@ -252,6 +335,32 @@ class Herramientas:
             "doctores": doctores,
         }
 
+    def consultar_tratamientos(self, args):
+        """Catálogo activo con precio de referencia. Si no hay coincidencia, el modelo debe
+        decir que consultará con el administrador (solicitar_revision_administrador)."""
+        texto = str(args.get("texto") or "").strip()
+        tratamientos = TipoTrabajo.objects.filter(activo=True).order_by("nombre")
+        if texto:
+            # Sin depender de tildes ni de la ortografía exacta ("extracción" -> "Extraccion").
+            tratamientos = [t for t in tratamientos if _tratamiento_mencionado([texto], t.nombre)]
+        return [
+            {
+                "tratamiento": t.nombre,
+                "precio_referencia_hnl": f"{t.precio:,.2f}",
+                "descripcion": t.descripcion,
+            }
+            for t in list(tratamientos)[:50]
+        ]
+
+    def solicitar_revision_administrador(self, args):
+        """Avisa al administrador que el paciente pide un tratamiento que no está en el catálogo."""
+        motivo = str(args.get("motivo") or "").strip()[:300]
+        logger.warning(
+            "Revisión de precios pendiente (conversación %s): %s", self.conversacion.pk, motivo
+        )
+        notificaciones.notificar_tratamiento_no_disponible(self.conversacion, motivo)
+        return {"registrado": True}
+
     def consultar_mis_pacientes(self, args):
         return [
             {"id": p.pk, "nombre": f"{p.nombres} {p.apellidos}", "sede_origen": p.sede_origen.nombre if p.sede_origen else None}
@@ -259,16 +368,11 @@ class Herramientas:
         ]
 
     def listar_mis_citas(self, args):
-        paciente = self.conversacion.paciente
-        if paciente is None:
-            raise ErrorHerramienta("Primero hay que identificar al paciente (seleccionar_paciente).")
-        citas = Atencion.objects.filter(
-            paciente=paciente, fecha__gte=timezone.localdate(), estado__in=ESTADOS_QUE_OCUPAN
-        ).select_related("sede", "doctor").order_by("fecha", "hora_inicio")
+        citas = self._citas_activas_del_paciente().order_by("fecha", "hora_inicio")
         return [
             {"id": c.pk, "fecha": c.fecha.isoformat(), "hora": c.hora_inicio.strftime("%H:%M"),
              "sede": c.sede.nombre, "doctor": f"{c.doctor.nombres} {c.doctor.apellidos}",
-             "estado": c.estado}
+             "tratamiento": c.tipo_trabajo.nombre, "estado": c.estado}
             for c in citas
         ]
 
@@ -287,11 +391,8 @@ class Herramientas:
         return {"paciente_seleccionado": f"{paciente.nombres} {paciente.apellidos}"}
 
     def preparar_paciente(self, args):
-        if self._pacientes_del_remitente().exists():
-            raise ErrorHerramienta(
-                "Ya hay pacientes registrados con este número. Pregunta cuál es el "
-                "paciente (consultar_mis_pacientes) o pide que contacten a recepción."
-            )
+        # Un mismo número puede tener varios pacientes (familiares). No se bloquea
+        # el alta por el hecho de que ya exista otro paciente con ese teléfono.
 
         # Los datos pueden llegar en varios mensajes: se mezcla lo nuevo con lo ya guardado.
         datos = self._datos_paciente_parciales()
@@ -352,6 +453,23 @@ class Herramientas:
             "sexo": datos.get("sexo") or "",
             "email": str(datos.get("email") or "").strip(),
         }
+        if identidad:
+            if Paciente.objects.filter(identidad=identidad).exists():
+                raise ErrorHerramienta(
+                    "Ese DNI ya está registrado. Si es el mismo paciente, usa "
+                    "consultar_mis_pacientes y seleccionar_paciente; si no, verifica el "
+                    "número de identidad."
+                )
+        elif self._pacientes_del_remitente().filter(
+            nombres__iexact=limpio["nombres"],
+            apellidos__iexact=limpio["apellidos"],
+            fecha_nacimiento=nacimiento,
+        ).exists():
+            raise ErrorHerramienta(
+                "Ya existe un paciente con ese nombre y fecha de nacimiento en este número. "
+                "Usa consultar_mis_pacientes y seleccionar_paciente."
+            )
+
         serializer = PacienteSerializer(data=limpio, context={"request": self.request})
         if not serializer.is_valid():
             raise ErrorHerramienta(self._errores(serializer))
@@ -364,26 +482,76 @@ class Herramientas:
         self._guardar_borrador("paciente", limpio, resumen)
         return {"pendiente_confirmacion": resumen, "edad": edad}
 
+    @staticmethod
+    def _tratamiento_nombrado(textos):
+        """Tratamiento activo que el paciente nombró en esos mensajes; el más reciente primero."""
+        catalogo = list(TipoTrabajo.objects.filter(activo=True))
+        for texto in reversed(textos):
+            for tipo in catalogo:
+                if _tratamiento_mencionado([texto], tipo.nombre):
+                    return tipo
+        return None
+
+    def _doctor_libre(self, sede, fecha, inicio, fin, excluir_cita_id=None):
+        """Primer doctor activo de la sede sin otra cita que se cruce con ese horario."""
+        for doctor in Doctor.objects.filter(activo=True, sedes=sede).order_by("nombres", "apellidos"):
+            cruce = Atencion.objects.filter(
+                doctor=doctor, fecha=fecha, estado__in=ESTADOS_QUE_OCUPAN,
+                hora_inicio__lt=fin, hora_fin__gt=inicio,
+            )
+            if excluir_cita_id is not None:
+                cruce = cruce.exclude(pk=excluir_cita_id)
+            if not cruce.exists():
+                return doctor
+        return None
+
     def preparar_cita(self, args):
-        paciente = self.conversacion.paciente
-        if paciente is None:
-            raise ErrorHerramienta("Primero hay que identificar al paciente (seleccionar_paciente).")
+        borrador = self.conversacion.borrador or {}
+        if (
+            self.conversacion.estado == ConversacionWhatsApp.Estado.ESPERANDO_CONFIRMACION
+            and borrador.get("tipo") == "paciente"
+        ):
+            raise ErrorHerramienta(
+                "Hay un alta de paciente pendiente de confirmar. Primero confirma el alta y "
+                "después prepara la cita."
+            )
+        paciente = self._paciente_de_la_conversacion()
         sede = self._sede(args.get("sede_id"))
-        doctor = Doctor.objects.filter(
-            pk=self._entero(args.get("doctor_id")), activo=True, sedes=sede
-        ).first()
-        if doctor is None:
-            raise ErrorHerramienta("Ese doctor no atiende en esa sede. Consulta consultar_disponibilidad.")
+        # El tratamiento puede haberse dicho al inicio del flujo (p. ej. "Extraccion")
+        # y luego el paciente solo eligió sede, día y hora. Se valida contra toda la
+        # conversación para no perder ese dato; el más reciente tiene prioridad.
+        textos = self._textos_paciente()
+        recientes = textos[-3:]
         tipo = TipoTrabajo.objects.filter(
             pk=self._entero(args.get("tipo_trabajo_id")), activo=True
         ).first()
+        if tipo is None or not _tratamiento_mencionado(textos, tipo.nombre):
+            # El modelo suele equivocar el id. Se usa el tratamiento que el paciente nombró.
+            tipo = self._tratamiento_nombrado(recientes) or self._tratamiento_nombrado(textos)
         if tipo is None:
-            raise ErrorHerramienta("Ese tipo de trabajo no existe.")
+            raise ErrorHerramienta(
+                "El paciente no ha nombrado un tratamiento del catálogo. Pregúntale qué tratamiento "
+                "quiere (consultar_tratamientos); si no está disponible, llama "
+                "solicitar_revision_administrador."
+            )
         fecha = self._fecha(args.get("fecha"))
         inicio = parse_time(args.get("hora_inicio") or "")
         if inicio is None:
             raise ErrorHerramienta("La hora debe tener formato HH:MM.")
         fin = (datetime.combine(fecha, inicio) + timedelta(minutes=DURACION_CITA_MINUTOS)).time()
+
+        # Sin doctor concreto (el paciente dijo "cualquiera"): se elige uno libre en esa hora.
+        doctor_id = self._entero(args.get("doctor_id"))
+        if doctor_id is None:
+            doctor = self._doctor_libre(sede, fecha, inicio, fin)
+            if doctor is None:
+                raise ErrorHerramienta(
+                    "No hay doctores libres en esa sede a esa hora. Consulta consultar_disponibilidad."
+                )
+        else:
+            doctor = Doctor.objects.filter(pk=doctor_id, activo=True, sedes=sede).first()
+            if doctor is None:
+                raise ErrorHerramienta("Ese doctor no atiende en esa sede. Consulta consultar_disponibilidad.")
 
         datos = {
             "sede": sede.pk,
@@ -403,9 +571,112 @@ class Herramientas:
         resumen = (
             f"Cita para {paciente.nombres} {paciente.apellidos}: {fecha.isoformat()} a las "
             f"{inicio.strftime('%H:%M')} en {sede.nombre} con {doctor.nombres} {doctor.apellidos} "
-            f"({tipo.nombre})"
+            f"({tipo.nombre}, precio de referencia L {tipo.precio:,.2f})"
         )
         self._guardar_borrador("cita", datos, resumen)
+        return {"pendiente_confirmacion": resumen}
+
+    def preparar_cancelacion_cita(self, args):
+        cita = self._cita_del_paciente(args.get("cita_id"))
+        resumen = (
+            f"Cancelar la cita de {cita.tipo_trabajo.nombre} del {cita.fecha.isoformat()} "
+            f"a las {cita.hora_inicio.strftime('%H:%M')} en {cita.sede.nombre} "
+            f"con {cita.doctor.nombres} {cita.doctor.apellidos}"
+        )
+        self._guardar_borrador("cancelar_cita", {"cita_id": cita.pk}, resumen)
+        return {"pendiente_confirmacion": resumen}
+
+    def preparar_modificacion_cita(self, args):
+        cita = self._cita_del_paciente(args.get("cita_id"))
+
+        sede = self._sede(args.get("sede_id")) if args.get("sede_id") else cita.sede
+        fecha = self._fecha(args["fecha"]) if args.get("fecha") else cita.fecha
+        if args.get("hora_inicio"):
+            inicio = parse_time(args["hora_inicio"])
+            if inicio is None:
+                raise ErrorHerramienta("La hora debe tener formato HH:MM.")
+        else:
+            inicio = cita.hora_inicio
+        fin = (datetime.combine(fecha, inicio) + timedelta(minutes=DURACION_CITA_MINUTOS)).time()
+
+        cambios = {}
+        if sede.pk != cita.sede_id:
+            cambios["sede"] = sede.pk
+        if fecha != cita.fecha:
+            cambios["fecha"] = fecha.isoformat()
+        if inicio != cita.hora_inicio:
+            cambios["hora_inicio"] = inicio.strftime("%H:%M")
+            cambios["hora_fin"] = fin.strftime("%H:%M")
+
+        doctor_id = self._entero(args.get("doctor_id"))
+        if doctor_id is not None:
+            doctor = Doctor.objects.filter(pk=doctor_id, activo=True, sedes=sede).first()
+            if doctor is None:
+                raise ErrorHerramienta(
+                    "Ese doctor no atiende en esa sede. Consulta consultar_disponibilidad."
+                )
+        elif "sede" in cambios:
+            # Cambia de sede sin decir doctor: se conserva el actual si atiende ahí,
+            # o se asigna uno libre en el nuevo horario.
+            doctor = self._doctor_libre(
+                sede, fecha, inicio, fin, excluir_cita_id=cita.pk
+            )
+            if doctor is None:
+                raise ErrorHerramienta(
+                    "No hay doctores libres en esa sede a esa hora. Consulta consultar_disponibilidad."
+                )
+        else:
+            doctor = cita.doctor
+        if doctor.pk != cita.doctor_id:
+            cambios["doctor"] = doctor.pk
+
+        tipo_id = self._entero(args.get("tipo_trabajo_id"))
+        if tipo_id is not None and tipo_id != cita.tipo_trabajo_id:
+            textos = self._textos_paciente()
+            recientes = textos[-3:]
+            tipo = TipoTrabajo.objects.filter(pk=tipo_id, activo=True).first()
+            if tipo is None or not _tratamiento_mencionado(textos, tipo.nombre):
+                # El modelo suele equivocar el id: se usa el tratamiento que el paciente nombró.
+                tipo = self._tratamiento_nombrado(recientes) or self._tratamiento_nombrado(textos)
+            if tipo is None:
+                raise ErrorHerramienta(
+                    "El paciente no nombró un tratamiento del catálogo. Pregúntale qué tratamiento "
+                    "quiere (consultar_tratamientos); si no está disponible, llama "
+                    "solicitar_revision_administrador."
+                )
+            if tipo.pk != cita.tipo_trabajo_id:
+                cambios["tipo_trabajo"] = tipo.pk
+
+        if not cambios:
+            raise ErrorHerramienta(
+                "No se indicó ningún cambio. Pregunta al paciente qué desea cambiar: fecha, hora, "
+                "sede, doctor o tratamiento."
+            )
+
+        serializer = AtencionSerializer(
+            instance=cita, data=cambios, partial=True, context={"request": self.request}
+        )
+        if not serializer.is_valid():
+            raise ErrorHerramienta(self._errores(serializer))
+
+        partes = []
+        if "fecha" in cambios:
+            partes.append(f"fecha {fecha.strftime('%d/%m/%Y')}")
+        if "hora_inicio" in cambios:
+            partes.append(f"hora {inicio.strftime('%H:%M')}")
+        if "sede" in cambios:
+            partes.append(f"sede {sede.nombre}")
+        if "doctor" in cambios:
+            partes.append(f"doctor {doctor.nombres} {doctor.apellidos}")
+        if "tipo_trabajo" in cambios:
+            partes.append(f"tratamiento {tipo.nombre}")
+        resumen = (
+            f"Cambiar la cita del {cita.fecha.isoformat()} a las "
+            f"{cita.hora_inicio.strftime('%H:%M')}: " + ", ".join(partes)
+        )
+        self._guardar_borrador(
+            "modificar_cita", {"cita_id": cita.pk, "cambios": cambios}, resumen
+        )
         return {"pendiente_confirmacion": resumen}
 
     def confirmar_accion(self, args):
@@ -423,19 +694,30 @@ class Herramientas:
 
         # 2. La confirmación debe ser un mensaje POSTERIOR al borrador y una afirmación limpia.
         ultimo = self._ultimo_mensaje_paciente()
-        if (
-            ultimo is None
-            or ultimo.creado <= creado
-            or not es_afirmativo(descifrar(ultimo.contenido_cifrado))
-        ):
+        if ultimo is None or not es_afirmativo(descifrar(ultimo.contenido_cifrado)):
             raise ErrorHerramienta(
-                "El paciente todavía no ha confirmado. Muestra el resumen y pregunta si es correcto."
+                "El último mensaje del paciente no es una confirmación clara (sí o no). "
+                "No lo interpretes: pregunta de nuevo '¿Confirma la cita? Responda sí o no'."
+            )
+        ultimo_id_borrador = borrador.get("ultimo_mensaje_id")
+        if ultimo_id_borrador is not None:
+            if ultimo.pk <= ultimo_id_borrador:
+                raise ErrorHerramienta(
+                    "El mensaje de confirmación debe ser posterior al resumen. Pregunta de nuevo "
+                    "'¿Confirma? Responda sí o no'."
+                )
+        elif ultimo.creado <= creado:
+            # Borradores antiguos (sin id): se conserva la comprobación por hora.
+            raise ErrorHerramienta(
+                "El último mensaje del paciente no es una confirmación clara (sí o no). "
+                "No lo interpretes: pregunta de nuevo '¿Confirma la cita? Responda sí o no'."
             )
 
         datos = borrador["datos"]
         tipo = borrador.get("tipo")
+        cita_creada = cita_cancelada = cita_modificada = None
 
-        # 3. Se revalida y se guarda todo junto: o se crea, o no se crea nada.
+        # 3. Se revalida y se guarda todo junto: o se aplica, o no cambia nada.
         with transaction.atomic():
             if tipo == "paciente":
                 serializer = PacienteSerializer(data=datos, context={"request": self.request})
@@ -451,10 +733,36 @@ class Herramientas:
                 )
                 if not serializer.is_valid():
                     raise ErrorHerramienta(self._errores(serializer))
-                cita = serializer.save()
+                cita_creada = serializer.save()
                 # Sin el id de la cita: el modelo no debe verlo ni repetirlo.
                 resultado = {
                     "cita_creada": True,
+                    "fecha": cita_creada.fecha.isoformat(),
+                    "hora": cita_creada.hora_inicio.strftime("%H:%M"),
+                }
+            elif tipo == "cancelar_cita":
+                cita = self._cita_del_paciente(datos.get("cita_id"))
+                cita.estado = Atencion.Estado.CANCELADA
+                cita.save(update_fields=["estado", "actualizada"])
+                cita_cancelada = cita
+                resultado = {
+                    "cita_cancelada": True,
+                    "fecha": cita.fecha.isoformat(),
+                    "hora": cita.hora_inicio.strftime("%H:%M"),
+                }
+            elif tipo == "modificar_cita":
+                cita = self._cita_del_paciente(datos.get("cita_id"))
+                cambios = datos.get("cambios") or {}
+                serializer = AtencionSerializer(
+                    instance=cita, data=cambios, partial=True,
+                    context={"request": self.request},
+                )
+                if not serializer.is_valid():
+                    raise ErrorHerramienta(self._errores(serializer))
+                cita = serializer.save()
+                cita_modificada = cita
+                resultado = {
+                    "cita_modificada": True,
                     "fecha": cita.fecha.isoformat(),
                     "hora": cita.hora_inicio.strftime("%H:%M"),
                 }
@@ -462,6 +770,15 @@ class Herramientas:
                 raise ErrorHerramienta("Acción pendiente desconocida.")
 
         self._limpiar_borrador()
+        # El aviso es informativo y nunca debe romper la confirmación del paciente.
+        if cita_creada is not None:
+            notificaciones.notificar_cita_creada(cita_creada)
+        elif cita_cancelada is not None:
+            notificaciones.notificar_cita_cancelada(cita_cancelada)
+        elif cita_modificada is not None:
+            notificaciones.notificar_cita_modificada(
+                cita_modificada, borrador.get("resumen", "")
+            )
         return {"confirmado": True, **resultado}
 
     def cancelar_accion(self, args):
@@ -485,7 +802,9 @@ class Herramientas:
 NOMBRES_HERRAMIENTAS = {
     "listar_sedes", "consultar_disponibilidad", "consultar_mis_pacientes",
     "listar_mis_citas", "seleccionar_paciente", "preparar_paciente",
-    "preparar_cita", "confirmar_accion", "cancelar_accion",
+    "preparar_cita", "preparar_cancelacion_cita", "preparar_modificacion_cita",
+    "confirmar_accion", "cancelar_accion",
+    "consultar_tratamientos", "solicitar_revision_administrador",
 }
 
 
@@ -528,7 +847,8 @@ DEFINICIONES = [
         "Prepara el alta de un paciente nuevo para confirmación. Se puede llamar varias veces con "
         "datos parciales: la respuesta dice en 'faltan' qué pedir. Requiere nombres, apellidos, sede, "
         "fecha de nacimiento y, para mayores de 18 años, el DNI. La dirección es opcional: si falta "
-        "se usa la de la sede.",
+        "se usa la de la sede. Sirve también para registrar familiares aunque el número ya tenga "
+        "otro paciente.",
         {
             "nombres": TEXTO, "apellidos": TEXTO, "sede_id": ENTERO, "direccion": TEXTO,
             "identidad": {**TEXTO, "description": "DNI de 13 dígitos; obligatorio para mayores de 18"},
@@ -540,17 +860,55 @@ DEFINICIONES = [
     ),
     _herramienta(
         "preparar_cita",
-        "Prepara una cita para el paciente seleccionado, para confirmación. Duración fija de 20 minutos.",
+        "Prepara una cita para el paciente seleccionado, para confirmación. Duración fija de 20 minutos. "
+        "Si el paciente no elige doctor ('cualquiera'), omite doctor_id: la herramienta asigna uno libre.",
         {
-            "sede_id": ENTERO, "doctor_id": ENTERO, "tipo_trabajo_id": ENTERO,
+            "sede_id": ENTERO, "doctor_id": {**ENTERO, "description": "Opcional; omitir si no hay preferencia"},
+            "tipo_trabajo_id": ENTERO,
             "fecha": {**TEXTO, "description": "AAAA-MM-DD"},
             "hora_inicio": {**TEXTO, "description": "HH:MM"},
         },
-        ["sede_id", "doctor_id", "tipo_trabajo_id", "fecha", "hora_inicio"],
+        ["sede_id", "tipo_trabajo_id", "fecha", "hora_inicio"],
+    ),
+    _herramienta(
+        "preparar_cancelacion_cita",
+        "Prepara la cancelación de una cita del paciente, para confirmación. Usa el id que "
+        "devuelve listar_mis_citas. Solo se pueden cancelar citas futuras del propio paciente.",
+        {"cita_id": ENTERO},
+        ["cita_id"],
+    ),
+    _herramienta(
+        "preparar_modificacion_cita",
+        "Prepara el cambio de fecha, hora, sede, doctor o tratamiento de una cita del paciente, "
+        "para confirmación. Indica solo lo que el paciente pidió cambiar.",
+        {
+            "cita_id": ENTERO,
+            "sede_id": ENTERO,
+            "doctor_id": {**ENTERO, "description": "Opcional; omitir si no hay preferencia"},
+            "tipo_trabajo_id": ENTERO,
+            "fecha": {**TEXTO, "description": "AAAA-MM-DD"},
+            "hora_inicio": {**TEXTO, "description": "HH:MM"},
+        },
+        ["cita_id"],
     ),
     _herramienta(
         "confirmar_accion",
-        "Guarda la cita o el paciente preparados. Solo llámala cuando el paciente haya confirmado el resumen.",
+        "Guarda la cita, el alta del paciente, la cancelación o el cambio preparados. Solo llámala "
+        "cuando el paciente haya confirmado el resumen.",
     ),
     _herramienta("cancelar_accion", "Descarta la acción pendiente si el paciente no la quiere."),
+    _herramienta(
+        "consultar_tratamientos",
+        "Tratamientos activos con su precio de referencia en lempiras (L). Úsala cuando el paciente "
+        "pregunte cuánto cuesta algo o qué tratamientos hay. Con 'texto' filtra por nombre.",
+        {"texto": {**TEXTO, "description": "Parte del nombre del tratamiento (opcional)"}},
+    ),
+    _herramienta(
+        "solicitar_revision_administrador",
+        "Avisa al administrador que el paciente pide un tratamiento que NO aparece en "
+        "consultar_tratamientos. Llámala y dile al paciente que ese tratamiento no está disponible "
+        "por ahora y que alguien de la clínica se comunicará con él.",
+        {"motivo": {**TEXTO, "description": "Qué tratamiento o precio pidió el paciente"}},
+        ["motivo"],
+    ),
 ]

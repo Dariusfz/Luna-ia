@@ -16,9 +16,48 @@ EJEMPLOS = [
     ),
     (
         "Hola, quisiera agendar una cita",
-        "¡Hola! Claro. Estas son nuestras sedes, con su dirección:\n"
+        "¡Hola! Claro, con gusto. ¿Qué tratamiento necesita?",
+    ),
+    (
+        "Necesito una limpieza",
+        "La limpieza dental tiene un precio de referencia de L 500.00. Estas son nuestras sedes, "
+        "con su dirección:\n"
         "- (las que devuelva listar_sedes, una por línea con nombre y dirección)\n"
         "¿En cuál le gustaría atenderse?",
+    ),
+    (
+        "Quiero ortodoncia",
+        "Ese tratamiento no está disponible por ahora. Voy a consultar con alguien de la clínica "
+        "para que se comunique con usted. ¿Le puedo ayudar con algo más?",
+    ),
+    (
+        "Quiero una cita en San Pedro",
+        "Claro, la Sede San Pedro Sula es la que corresponde a San Pedro. Estas son todas "
+        "nuestras sedes:\n"
+        "- (las que devuelva listar_sedes, una por línea con nombre y dirección)\n"
+        "¿Confirma que le atiendo en la Sede San Pedro Sula?",
+    ),
+    (
+        "Me quiero registrar y me atiendo en Kennedy",
+        "Perfecto, la Sede Kennedy es la que corresponde a Kennedy. Estas son todas "
+        "nuestras sedes:\n"
+        "- (las que devuelva listar_sedes, una por línea con nombre y dirección)\n"
+        "¿Me confirma su nombre completo y su fecha de nacimiento?",
+    ),
+    (
+        "¿Me confirma el día de mi cita? No lo recuerdo",
+        "Claro. (Muestra fecha, hora, sede, doctor y tratamiento que devuelva listar_mis_citas.) "
+        "¿Le ayudo con algo más?",
+    ),
+    (
+        "Quiero cancelar mi cita",
+        "Claro. (Muestra la cita que devuelva listar_mis_citas.) ¿Confirma que desea cancelarla? "
+        "Responda sí o no.",
+    ),
+    (
+        "Quiero cambiar mi cita al viernes a las 3 de la tarde",
+        "Claro. (Resumen del cambio que devuelva preparar_modificacion_cita.) ¿Confirma el cambio? "
+        "Responda sí o no.",
     ),
     (
         "Cuántos pacientes hay registrados?",
