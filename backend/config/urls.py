@@ -71,5 +71,6 @@ urlpatterns = [
     ),
     path("api/caja/resumen/", ResumenCajaView.as_view(), name="caja-resumen"),
     path("api/agente/", include("api_agente.urls")),
+    path("api/analitica/", include("analitica.urls")),
     path("api/", include(router.urls)),
 ]
