@@ -27,7 +27,7 @@ def llamada(nombre, argumentos="{}", id_="call_1"):
 
 class AsistenteBase(TestCase):
     def setUp(self):
-        org = Organizacion.objects.create(nombre="Clínica")
+        org = Organizacion.objects.create(nombre="ClÃ­nica")
         self.sede_a = Sede.objects.create(nombre="Centro", organizacion=org)
         self.sede_b = Sede.objects.create(nombre="Norte", organizacion=org)
         self.admin = Usuario.objects.create_user("admin", password="x-Clave-2026!", rol="admin")
@@ -35,10 +35,10 @@ class AsistenteBase(TestCase):
             "recep", password="x-Clave-2026!", rol="recepcionista"
         )
         self.recep.sedes.set([self.sede_a])
-        doctor = Doctor.objects.create(tipo="contratado", nombres="Luis", apellidos="Mejía")
+        doctor = Doctor.objects.create(tipo="contratado", nombres="Luis", apellidos="MejÃ­a")
         doctor.sedes.set([self.sede_a, self.sede_b])
         paciente = Paciente.objects.create(
-            nombres="Ana", apellidos="López", sede_origen=self.sede_a, direccion="Col. Centro"
+            nombres="Ana", apellidos="LÃ³pez", sede_origen=self.sede_a, direccion="Col. Centro"
         )
         tipo = TipoTrabajo.objects.create(nombre="Limpieza", precio=500)
         hoy = timezone.localdate()
@@ -78,7 +78,7 @@ class AsistenteTests(AsistenteBase):
             {"role": "assistant", "content": "Hoy hay 2 citas pendientes."},
         ]
         respuesta = self.admin_api.post(
-            URL, {"pregunta": "¿cuántas citas hay hoy?"}, format="json"
+            URL, {"pregunta": "Â¿cuÃ¡ntas citas hay hoy?"}, format="json"
         )
         self.assertEqual(respuesta.status_code, 200)
         datos = respuesta.json()
@@ -92,11 +92,11 @@ class AsistenteTests(AsistenteBase):
     def test_respuesta_sin_herramienta_no_trae_grafica(self, chat):
         chat.return_value = {
             "role": "assistant",
-            "content": "Solo puedo ayudar con métricas de la clínica.",
+            "content": "Solo puedo ayudar con mÃ©tricas de la clÃ­nica.",
         }
         datos = self.admin_api.post(URL, {"pregunta": "dime un chiste"}, format="json").json()
         self.assertIsNone(datos["grafica"])
-        self.assertIn("métricas", datos["respuesta"])
+        self.assertIn("mÃ©tricas", datos["respuesta"])
 
     @patch("analitica.asistente.llm.chat")
     def test_recepcionista_no_ve_sedes_ajenas_aunque_el_modelo_las_pida(self, chat):
@@ -125,7 +125,7 @@ class AsistenteTests(AsistenteBase):
         ]
         respuesta = self.admin_api.post(URL, {"pregunta": "algo"}, format="json")
         self.assertEqual(respuesta.status_code, 200)
-        # La sede inválida la rechaza la vista (400): no hay gráfica.
+        # La sede invÃ¡lida la rechaza la vista (400): no hay grÃ¡fica.
         self.assertIsNone(respuesta.json()["grafica"])
 
     @patch("analitica.asistente.llm.chat")
@@ -139,16 +139,21 @@ class AsistenteTests(AsistenteBase):
 
     @patch("analitica.asistente.llm.chat")
     def test_llm_caido_devuelve_503(self, chat):
-        chat.side_effect = llm.LLMError("sin conexión")
+        chat.side_effect = llm.LLMError("sin conexiÃ³n")
         respuesta = self.admin_api.post(URL, {"pregunta": "hola"}, format="json")
         self.assertEqual(respuesta.status_code, 503)
 
-    def test_definiciones_solo_exponen_consultas_permitidas(self):
-        nombres = {d["function"]["name"] for d in _definiciones()}
+    def test_admin_recibe_todas_las_herramientas(self):
+        nombres = {d["function"]["name"] for d in _definiciones(self.admin)}
         self.assertEqual(
             nombres,
-            {"citas_hoy", "atendidos_mes", "por_servicio", "por_hora", "por_sede"},
+            {"citas_hoy", "atendidos_mes", "por_servicio", "por_hora", "por_sede", "ingresos", "consultar_registros", "analisis_estrategico"},
         )
+
+    def test_recepcionista_no_recibe_ingresos(self):
+        nombres = {d["function"]["name"] for d in _definiciones(self.recep)}
+        self.assertNotIn("ingresos", nombres)
+        self.assertIn("por_sede", nombres)
 
     def test_argumentos_seguros_filtra_claves(self):
         self.assertEqual(
@@ -156,3 +161,4 @@ class AsistenteTests(AsistenteBase):
             {"sede": "3", "desde": "2026-01-01"},
         )
         self.assertEqual(_argumentos_seguros("no es dict"), {})
+

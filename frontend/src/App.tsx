@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import LayoutPrincipal from './componentes/LayoutPrincipal'
 import RequiereSesion from './componentes/RequiereSesion'
 import AceptarInvitacion from './paginas/AceptarInvitacion'
+import Asistente from './paginas/Asistente'
 import Atenciones from './paginas/Atenciones'
 import Caja from './paginas/Caja'
 import Configuracion from './paginas/Configuracion'
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="pacientes" element={<Pacientes />} />
           <Route path="atenciones" element={<Atenciones />} />
           <Route path="lista-espera" element={<ListaEspera />} />
+          <Route path="asistente" element={<Asistente />} />
           <Route path="caja" element={<Caja />} />
           <Route path="personal" element={<Personal />} />
           <Route path="doctores" element={<Doctores />} />

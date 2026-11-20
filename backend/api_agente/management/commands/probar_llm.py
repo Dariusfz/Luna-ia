@@ -7,6 +7,7 @@ from django.core.management.base import BaseCommand
 from api_agente import llm
 from api_agente.agente import MAX_ITERACIONES, _limpiar, prompt_del_sistema
 from api_agente.herramientas import DEFINICIONES
+from api_agente.llamadas_textuales import llamadas_textuales, sin_marcas
 from api_agente.seguridad import (
     RESPUESTA_MANIPULACION, detectar_emergencia, es_manipulacion, mensaje_emergencia,
 )
@@ -88,15 +89,19 @@ class Command(BaseCommand):
                 continue
 
             llamadas = [
-                c["function"]["name"] for c in (mensaje.get("tool_calls") or [])
+                c["function"]["name"]
+                for c in (mensaje.get("tool_calls") or llamadas_textuales(mensaje.get("content")))
             ]
             elegida = llamadas[0] if llamadas else None
             ok = (elegida in esperadas) if esperadas else (elegida is None)
             aciertos += int(ok)
             detalle = (
-                json.dumps(mensaje["tool_calls"][0]["function"]["arguments"], ensure_ascii=False)
-                if llamadas and mensaje.get("tool_calls")
-                else (mensaje.get("content") or "").strip()[:120]
+                json.dumps(
+                    (mensaje.get("tool_calls") or llamadas_textuales(mensaje.get("content")))[0]["function"]["arguments"],
+                    ensure_ascii=False,
+                )
+                if llamadas
+                else sin_marcas(mensaje.get("content"))[:120]
             )
             self.stdout.write(
                 f"{'OK    ' if ok else 'REVISAR'} {frase!r}\n"
@@ -111,12 +116,12 @@ class Command(BaseCommand):
         mensajes = list(mensajes)
         simuladas = HerramientasSimuladas()
         for _ in range(MAX_ITERACIONES):
-            llamadas = mensaje.get("tool_calls") or []
+            llamadas = mensaje.get("tool_calls") or llamadas_textuales(mensaje.get("content"))
             if not llamadas:
-                return _limpiar(mensaje.get("content", ""))
+                return _limpiar(sin_marcas(mensaje.get("content")))
             mensajes.append({
                 "role": "assistant",
-                "content": mensaje.get("content") or "",
+                "content": _limpiar(sin_marcas(mensaje.get("content"))),
                 "tool_calls": llamadas,
             })
             for llamada in llamadas:

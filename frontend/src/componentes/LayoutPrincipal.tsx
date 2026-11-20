@@ -8,6 +8,7 @@ import {
   LogoutOutlined,
   MedicineBoxOutlined,
   MenuOutlined,
+  RobotOutlined,
   SettingOutlined,
   TagsOutlined,
   TeamOutlined,
@@ -34,6 +35,7 @@ const itemsBase: NonNullable<MenuProps['items']> = [
   { key: '/doctores', icon: <MedicineBoxOutlined />, label: 'Doctores' },
   { key: '/especialidades', icon: <ExperimentOutlined />, label: 'Especialidades' },
   { key: '/tipos-trabajo', icon: <TagsOutlined />, label: 'Tipos de trabajo' },
+  { key: '/asistente', icon: <RobotOutlined />, label: 'Asistente IA' },
 ]
 
 const itemsAdmin: NonNullable<MenuProps['items']> = [

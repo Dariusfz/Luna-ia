@@ -110,8 +110,9 @@ Flujo: webhook de Evolution → tarea Celery en cola `audio` → descarga del au
 - Fallback: si la transcripción falla, pedir al paciente que escriba.
 
 ### 5.4 Asistente interno del ERP
-- Endpoints analíticos predefinidos (`/api/analitica/...`: citas-hoy, atendidos-mes, por-servicio, por-hora, por-sede).
+- Endpoints analíticos predefinidos (`/api/analitica/...`: citas-hoy, atendidos-mes, por-servicio, por-hora, por-sede, ingresos).
 - El LLM **elige la tool** e interpreta la pregunta; el backend devuelve `{tipo_grafica, ejes, datos}`.
+- Herramienta de **análisis estratégico** (`analisis_estrategico`): tendencias por mes, proyección del próximo mes, tratamientos más solicitados, horas pico, carga de doctores, sedes, lista de espera e ingresos. Los cálculos los hace el backend; el modelo solo interpreta y propone el plan.
 - El frontend renderiza con Ant Design Charts. **No se usa SQL libre.**
 
 ## 6. Autenticación, roles y seguridad
@@ -302,7 +303,7 @@ git push -u origin main
 
 ## 15. Estado de implementación (avance real)
 
-> Actualizado: 06/11/2026. Esta sección describe **qué existe ya en el código**, para que quien retome el proyecto no repita trabajo. Lo planificado está arriba; aquí va lo construido y lo que falta.
+> Actualizado: 19/11/2026. Esta sección describe **qué existe ya en el código**, para que quien retome el proyecto no repita trabajo. Lo planificado está arriba; aquí va lo construido y lo que falta.
 
 ### 15.1 Puesta en marcha en desarrollo (Windows)
 
@@ -342,7 +343,15 @@ ollama pull llama3.1:8b
 - **Registro de pacientes:** datos acumulables entre mensajes, fecha en formato hondureño (`DD/MM/AAAA`) o ISO, edad calculada y DNI obligatorio para adultos. Django descarta la fecha o el DNI que el modelo proponga si el paciente no los escribió (guardas `_fecha_mencionada`/`_identidad_mencionada`) y los vuelve a pedir conservando el resto del borrador.
 - **Argumentos del modelo:** las tools validan los ids (`_entero`) antes de consultar; un `sede_id` o `paciente_id` no numérico devuelve error al modelo en vez de romper el worker.
 - **Comando de diagnóstico:** `manage.py probar_llm` prueba el modelo contra 13 frases (incluye fugas de datos y temas ajenos); con `--respuestas` muestra la respuesta final que vería el paciente usando herramientas simuladas (no escribe en la BD).
-- **Tests:** 337 en total, todos en verde (119 de `api_agente`). Cubren webhook, deduplicación, cifrado, borradores, confirmación explícita, aislamiento de pacientes por teléfono, pausa del agente, limpieza de ` thinking`, argumentos inválidos, alta de pacientes, cancelación/modificación de citas y avisos al administrador.
+- **Asistente interno del ERP (sección 5.4) — implementado en `analitica`:**
+  - `views.py`: endpoints `citas-hoy`, `atendidos-mes`, `por-servicio`, `por-hora`, `por-sede` e `ingresos` con formato común `{titulo, tipo_grafica, ejes, datos, total, filtros}`; rango máximo de 366 días.
+  - `politicas.py`: matriz de consultas por rol. Admin ve todo (incluye ingresos); recepcionista no ve ingresos; asistente solo agenda del día, por hora y por servicio; doctor solo su propia agenda.
+  - `registros.py`: herramienta `consultar_registros` (pacientes, doctores, especialidades, tipos de trabajo, sedes, atenciones, lista de espera, pagos, pagos a doctores, jornadas externas, personal) con filtros tipados, agrupación, `limite` ≤ 50 y `suma_total`. Excluye a propósito DNI, correo, dirección, datos clínicos e ids.
+  - `estrategia.py`: herramienta `analisis_estrategico` (ver 5.4). Cada sección aparece solo si el rol tiene acceso; las citas respetan el alcance por sede y por doctor. Las proyecciones son una regresión lineal sobre los meses completos.
+  - `asistente.py`: vista `POST /api/analitica/asistente/`, prompt por rol, persistencia de conversaciones (`ConversacionAsistente`/`MensajeAsistente`, últimos 10 mensajes), endpoints `asistente/conversaciones/` (listar, ver, borrar; privadas por usuario), 503 si el LLM falla y respaldo con los datos si la redacción sale vacía.
+  - **Llamadas escritas como texto:** si el modelo devuelve la llamada con marcas DSML en el contenido, se parsea y se ejecuta (`api_agente/llamadas_textuales.py`, compartido con el agente de WhatsApp). Las marcas nunca llegan al usuario.
+  - **Frontend:** `frontend/src/paginas/Asistente.tsx` (chat, gráficas con color por categoría, historial de conversaciones, sugerencias por rol) y entrada "Asistente IA" en el menú.
+- **Tests:** 445 en total, todos en verde. `analitica` cubre formato de endpoints, permisos por rol y sede, registros, llamadas textuales, conversaciones, proyecciones y contenido del análisis estratégico; `api_agente` cubre webhook, deduplicación, cifrado, borradores, confirmación explícita, aislamiento de pacientes por teléfono, pausa del agente, limpieza de ` thinking`, argumentos inválidos, alta de pacientes, cancelación/modificación de citas y avisos al administrador.
 
 ### 15.3 Cómo probar el agente
 
@@ -359,8 +368,17 @@ ollama pull llama3.1:8b
 - **Notificaciones internas:** `api_agente/notificaciones.py` avisa por WhatsApp al número de `ADMIN_WHATSAPP` cuando el agente crea, modifica o cancela una cita, o cuando el paciente pide un tratamiento fuera del catálogo. Es informativo: si el envío falla, la acción del paciente no se interrumpe. Los recordatorios programados seguirán en n8n.
 - **Honorario de las citas creadas por el agente:** se guarda en 0 y el personal lo ajusta después.
 - **Dirección del paciente:** si no la da, se guarda la de la sede (no la suya). Conviene que recepción la corrija.
-- **Asistente interno del ERP (sección 5.4):** no implementado todavía.
+- **Asistente interno:** implementado (ver 15.2). Límites: las proyecciones son lineales y con pocos meses de datos pueden desviarse; no hay retención automática de conversaciones (hoy se borran a mano); el asistente redacta con el LLM, así que la forma de la respuesta puede variar, pero las cifras salen del backend.
 - **Panel de pausa:** solo existe en el admin de Django; falta el botón en el frontend.
 - **Modelo:** `llama3.1:8b` a veces llama una herramienta innecesaria (por ejemplo `listar_sedes` al saludar o `cancelar_accion` ante un dolor). La respuesta final es correcta, pero gasta una llamada extra. Si molesta, filtrar por intención antes de darle tools. También tiende a rellenar huecos con datos inventados: por eso las guardas de Django son la defensa real, no el prompt.
 - **Contexto:** los ejemplos son few-shot en `contexto.py`. No se usa `pgvector`: con decenas de casos no aporta y añade infraestructura. Si algún día hay cientos de políticas o preguntas frecuentes para recuperar, ahí sí conviene RAG con `pgvector`.
 - **Git:** hay cambios sin commitear y el commit `52f36af` no se ha subido a `origin`.
+
+### 15.5 Cómo probar el asistente interno
+
+1. Con `runserver` en marcha, entrar al ERP con un usuario `admin` y abrir **Asistente IA** en el menú.
+2. Preguntas útiles: `¿cuántas citas hay hoy?`, `¿cuántos pacientes se atendieron este mes?`, `citas por servicio de los últimos 30 días`.
+3. Plan estratégico: `haz un plan estratégico: cuántas personas se atienden, proyección y qué tratamientos conviene impulsar`. Debe traer diagnóstico con cifras, proyección, tratamientos en crecimiento y recomendaciones.
+4. Comprobar el aislamiento: con un usuario `recepcionista` no debe aparecer información de ingresos; con un `doctor`, solo sus propias citas.
+5. Sin LLM disponible, el endpoint responde 503; si el modelo no redacta, la respuesta se arma con los datos de la consulta.
+6. Si se cambió `asistente.py`, `estrategia.py` o `registros.py`, reiniciar `runserver` antes de probar.

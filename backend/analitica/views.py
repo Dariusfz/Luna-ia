@@ -21,11 +21,16 @@ from django.db.models import Count
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
+from rest_framework.test import APIRequestFactory, force_authenticate
 from rest_framework.views import APIView
 
 from agenda.models import Atencion, AtencionTrabajo
+from pagos.views import ResumenCajaView
 from users.permisos import filtrar_por_sede
+
+from .politicas import puede_consultar, solo_agenda_propia
 
 MAX_DIAS_RANGO = 366
 
@@ -83,11 +88,21 @@ def _sede(params):
 
 
 class AnaliticaBase(APIView):
-    """Base común: resuelve filtros, aplica permisos por sede y formatea la respuesta."""
+    """Base común: valida el rol, resuelve filtros por sede y formatea la respuesta."""
+
+    # Nombre de la consulta según `politicas.py`; lo fija cada vista.
+    consulta: str | None = None
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if self.consulta and not puede_consultar(request.user, self.consulta):
+            raise PermissionDenied("Tu rol no tiene acceso a esta información.")
 
     def _base(self, request):
         """Atenciones visibles para el usuario, opcionalmente filtradas por una sede."""
         qs = filtrar_por_sede(Atencion.objects.all(), request.user)
+        if solo_agenda_propia(request.user):
+            qs = qs.filter(doctor__usuario=request.user)
         sede = _sede(request.query_params)
         if sede is not None:
             qs = qs.filter(sede_id=sede)
@@ -111,6 +126,8 @@ class AnaliticaBase(APIView):
 
 class CitasHoyView(AnaliticaBase):
     """Citas del día por estado (incluye canceladas para dar contexto operativo)."""
+
+    consulta = "citas_hoy"
 
     def get(self, request):
         try:
@@ -137,6 +154,8 @@ class CitasHoyView(AnaliticaBase):
 
 class AtendidosMesView(AnaliticaBase):
     """Atenciones completadas por día en un mes (`mes=AAAA-MM`, por defecto el actual)."""
+
+    consulta = "atendidos_mes"
 
     def get(self, request):
         try:
@@ -177,6 +196,8 @@ class _RangoAtencionesView(AnaliticaBase):
 class PorServicioView(_RangoAtencionesView):
     """Cantidad de citas por tipo de trabajo (una cita con varios trabajos cuenta en cada uno)."""
 
+    consulta = "por_servicio"
+
     def get(self, request):
         try:
             atenciones, desde, hasta, sede = self._atenciones(request)
@@ -202,6 +223,8 @@ class PorServicioView(_RangoAtencionesView):
 class PorHoraView(_RangoAtencionesView):
     """Cantidad de citas por hora de inicio."""
 
+    consulta = "por_hora"
+
     def get(self, request):
         try:
             atenciones, desde, hasta, sede = self._atenciones(request)
@@ -224,6 +247,8 @@ class PorHoraView(_RangoAtencionesView):
 class PorSedeView(_RangoAtencionesView):
     """Cantidad de citas por sede. El admin ve todas; el resto, solo sus sedes."""
 
+    consulta = "por_sede"
+
     def get(self, request):
         try:
             atenciones, desde, hasta, sede = self._atenciones(request)
@@ -242,4 +267,52 @@ class PorSedeView(_RangoAtencionesView):
             "Citas",
             datos,
             {"desde": desde.isoformat(), "hasta": hasta.isoformat(), "sede": sede},
+        )
+
+
+class IngresosView(AnaliticaBase):
+    """
+    Dinero de la clínica en un rango: cobrado, por cobrar, comisión a doctores y ganancia.
+    Reutiliza el resumen de caja (`pagos.views.ResumenCajaView`), que ya es solo para admin.
+    Solo el admin ve los importes: la política de `politicas.py` lo garantiza.
+    """
+
+    consulta = "ingresos"
+
+    def get(self, request):
+        try:
+            desde, hasta = _rango(request.query_params)
+            sede = _sede(request.query_params)
+        except ErrorFiltro as error:
+            return self._error(error)
+
+        parametros = {"desde": desde.isoformat(), "hasta": hasta.isoformat()}
+        if sede is not None:
+            parametros["sede"] = str(sede)
+        peticion = APIRequestFactory().get("/api/caja/resumen/", parametros)
+        force_authenticate(peticion, user=request.user)
+        caja = ResumenCajaView.as_view()(peticion)
+        if caja.status_code != status.HTTP_200_OK:
+            return Response(caja.data, status=caja.status_code)
+
+        # Los importes van en lempiras (no son conteos). `total` es lo cobrado.
+        datos = [
+            ("Cobrado", float(caja.data["cobrado"])),
+            ("Por cobrar", float(caja.data["por_cobrar"])),
+            ("Comisión doctores", float(caja.data["comision_doctores"])),
+            ("Ganancia neta", float(caja.data["ganancia"])),
+        ]
+        return Response(
+            {
+                "titulo": "Ingresos (HNL)",
+                "tipo_grafica": "barras",
+                "ejes": {"x": "Concepto", "y": "Lempiras"},
+                "datos": [{"etiqueta": e, "valor": v} for e, v in datos],
+                "total": float(caja.data["cobrado"]),
+                "filtros": {
+                    "desde": desde.isoformat(),
+                    "hasta": hasta.isoformat(),
+                    "sede": sede,
+                },
+            }
         )

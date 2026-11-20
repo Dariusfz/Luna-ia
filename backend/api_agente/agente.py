@@ -18,6 +18,7 @@ from . import llm
 from .cifrado import descifrar
 from .contexto import bloque_ejemplos
 from .herramientas import DEFINICIONES, Herramientas
+from .llamadas_textuales import llamadas_textuales, sin_marcas
 from .models import ConversacionWhatsApp, MensajeWhatsApp
 
 
@@ -158,9 +159,9 @@ def responder(conversacion: ConversacionWhatsApp) -> str:
             logger.exception("Fallo del LLM en la conversación %s", conversacion.pk)
             return RESPUESTA_FALLO
 
-        llamadas = mensaje.get("tool_calls") or []
+        llamadas = mensaje.get("tool_calls") or llamadas_textuales(mensaje.get("content"))
         if not llamadas:
-            texto = _limpiar(mensaje.get("content", ""))
+            texto = _limpiar(sin_marcas(mensaje.get("content", "")))
             motivo = revisar_salida(texto, permitidos)
             if motivo:
                 logger.warning(
@@ -171,7 +172,7 @@ def responder(conversacion: ConversacionWhatsApp) -> str:
 
         mensajes.append({
             "role": "assistant",
-            "content": mensaje.get("content") or "",
+            "content": _limpiar(sin_marcas(mensaje.get("content"))),
             "tool_calls": llamadas,
         })
         for llamada in llamadas:
@@ -210,7 +211,7 @@ def responder(conversacion: ConversacionWhatsApp) -> str:
     })
     try:
         mensaje = llm.chat(mensajes, [], session_id=f"ses_conv_{conversacion.pk}")
-        texto = _limpiar(mensaje.get("content", ""))
+        texto = _limpiar(sin_marcas(mensaje.get("content", "")))
         if texto and not revisar_salida(texto, permitidos):
             return texto
     except llm.LLMError:

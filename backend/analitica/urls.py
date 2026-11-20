@@ -1,9 +1,10 @@
-﻿from django.urls import path
+from django.urls import path
 
-from .asistente import AsistenteView
+from .asistente import AsistenteView, ConversacionDetalleView, ConversacionesView
 from .views import (
     AtendidosMesView,
     CitasHoyView,
+    IngresosView,
     PorHoraView,
     PorSedeView,
     PorServicioView,
@@ -15,6 +16,18 @@ urlpatterns = [
     path("por-servicio/", PorServicioView.as_view(), name="analitica-por-servicio"),
     path("por-hora/", PorHoraView.as_view(), name="analitica-por-hora"),
     path("por-sede/", PorSedeView.as_view(), name="analitica-por-sede"),
+    path("ingresos/", IngresosView.as_view(), name="analitica-ingresos"),
     path("asistente/", AsistenteView.as_view(), name="analitica-asistente"),
+    path(
+        "asistente/conversaciones/",
+        ConversacionesView.as_view(),
+        name="analitica-asistente-conversaciones",
+    ),
+    path(
+        "asistente/conversaciones/<int:pk>/",
+        ConversacionDetalleView.as_view(),
+        name="analitica-asistente-conversacion",
+    ),
 ]
+
 

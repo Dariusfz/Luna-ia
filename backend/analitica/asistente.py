@@ -13,20 +13,26 @@ import json
 import logging
 from datetime import timedelta
 
+from django.db import transaction
 from django.utils import timezone
-from rest_framework import status
+from rest_framework import generics, serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.test import APIRequestFactory, force_authenticate
 from rest_framework.views import APIView
 
 from api_agente import llm
+from api_agente.llamadas_textuales import llamadas_textuales, sin_marcas
 from sedes.models import Sede
 from users.permisos import filtrar_por_sede
 
+from .models import ConversacionAsistente, MensajeAsistente
+from . import estrategia, registros
+from .politicas import consultas_permitidas, puede_consultar
 from .views import (
     AtendidosMesView,
     CitasHoyView,
+    IngresosView,
     PorHoraView,
     PorSedeView,
     PorServicioView,
@@ -85,6 +91,26 @@ HERRAMIENTAS = {
         ),
         "parametros": ["desde", "hasta"],
     },
+    "ingresos": {
+        "vista": IngresosView.as_view(),
+        "ruta": "/api/analitica/ingresos/",
+        "descripcion": (
+            "Dinero de la clínica en un rango de fechas: cobrado, por cobrar, comisión a "
+            "doctores y ganancia neta (en lempiras). Úsala para preguntas sobre dinero, "
+            "ingresos, cobros, caja, ganancias o cuánto se ha cobrado o hecho."
+        ),
+        "parametros": ["desde", "hasta", "sede"],
+    },
+}
+
+# Módulo al que pertenece cada consulta, para explicarle al usuario qué puede consultar.
+MODULO_DE_CONSULTA = {
+    "citas_hoy": "Agenda: citas de hoy por estado",
+    "atendidos_mes": "Atenciones: pacientes atendidos por mes",
+    "por_servicio": "Tratamientos: citas por tipo de trabajo",
+    "por_hora": "Agenda: citas por hora",
+    "por_sede": "Sedes: comparación de citas entre sedes",
+    "ingresos": "Caja: cobrado, por cobrar, comisiones y ganancia",
 }
 
 DESCRIPCION_PARAMETROS = {
@@ -95,9 +121,12 @@ DESCRIPCION_PARAMETROS = {
 }
 
 
-def _definiciones() -> list[dict]:
+def _definiciones(usuario) -> list[dict]:
+    """Solo las herramientas que el rol del usuario puede usar."""
     definiciones = []
     for nombre, config in HERRAMIENTAS.items():
+        if not puede_consultar(usuario, nombre):
+            continue
         propiedades = {
             parametro: {"type": "string", "description": DESCRIPCION_PARAMETROS[parametro]}
             for parametro in config["parametros"]
@@ -116,6 +145,12 @@ def _definiciones() -> list[dict]:
                 },
             }
         )
+    herramienta_registros = registros.definicion_herramienta(usuario)
+    if herramienta_registros:
+        definiciones.append(herramienta_registros)
+    herramienta_estrategia = estrategia.definicion_herramienta(usuario)
+    if herramienta_estrategia:
+        definiciones.append(herramienta_estrategia)
     return definiciones
 
 
@@ -127,17 +162,40 @@ def _sedes_visibles(usuario) -> str:
     return "\n".join(filas) or "- (no tienes sedes asignadas)"
 
 
+def _modulos_disponibles(usuario) -> str:
+    lineas = [
+        f"- {MODULO_DE_CONSULTA[nombre]}"
+        for nombre in HERRAMIENTAS
+        if nombre in consultas_permitidas(usuario)
+    ]
+    lineas += [
+        f"- Registros ({nombre}): {registros.ENTIDADES[nombre].descripcion}"
+        for nombre in sorted(registros.entidades_permitidas(usuario))
+    ]
+    return "\n".join(lineas) or "- (ninguno: tu rol no tiene consultas habilitadas)"
+
+
 def _prompt_sistema(usuario) -> str:
     hoy = timezone.localdate()
     ayer = hoy - timedelta(days=1)
     return f"""Eres el asistente interno de LUNA-IA, el sistema de una clínica odontológica en Honduras.
 Hoy es {hoy.isoformat()} (ayer fue {ayer.isoformat()}). Respondes en español, breve y claro.
 
-Respondes preguntas de métricas de la clínica usando las herramientas disponibles.
+Respondes preguntas sobre la clínica usando SOLO las herramientas que tienes disponibles.
+Módulos a los que este usuario tiene acceso:
+{_modulos_disponibles(usuario)}
+
 - Elige la herramienta que mejor responda la pregunta y llénala con los filtros que el usuario mencione.
+- Para contar, buscar o listar registros (pacientes, doctores, especialidades, tratamientos, sedes, citas, lista de espera, pagos o personal) usa consultar_registros. Por ejemplo, "cuántos pacientes se llaman Carlos" es entidad pacientes con filtro nombre "Carlos". Si el resultado tiene más registros que los mostrados, dilo.
+- Responde con todos los datos que devuelva la herramienta (nombres, fechas, montos, estados), sin resumirlos de más. Nunca muestres identificadores internos.
+- Para "este mes", "en octubre", etc., usa el filtro "mes" (AAAA-MM) en lugar de fechas: cuenta el mes completo, incluidas las fechas futuras. Hoy es {hoy.isoformat()}, así que "este mes" es {hoy.strftime('%Y-%m')}.
+- Para planes estratégicos, análisis, proyecciones, recomendaciones o "qué tratamientos conviene impulsar", usa analisis_estrategico. Estructura la respuesta en: 1) Diagnóstico con cifras (pacientes atendidos por mes, citas, cancelaciones, tendencias); 2) Proyección del próximo mes, indicando que es una estimación; 3) Tratamientos que crecen y los que bajan, y qué conviene promover o ajustar; 4) Recomendaciones priorizadas y concretas (horarios pico, carga de doctores, sedes, lista de espera); 5) Riesgos. Todo debe salir de los datos del resultado: si una sección no aparece en el resultado, no hables de ese tema.
+- Para "cuántas citas": el número es el campo "total" del resultado, tal cual. Incluye todas las citas (también canceladas) y desglósalas por estado (pendiente, confirmada, completada, cancelada). No excluyas ninguna salvo que el usuario lo pida.
+- Para citas creadas por el agente de WhatsApp usa origen "agente_whatsapp" en consultar_registros.
 - Convierte fechas relativas ("hoy", "ayer", "este mes", "la semana pasada") a AAAA-MM-DD o AAAA-MM según corresponda.
-- Si no mencionan sede, no envíes sede (verás el consolidado de todas tus sedes).
-- Si la pregunta no es sobre métricas de la clínica, responde que solo puedes ayudar con estadísticas de citas y atenciones, sin llamar herramientas.
+- Si no mencionan sede, no envíes sede (verás el consolidado de tus sedes).
+- Si la pregunta pide información de un módulo que no está en la lista de arriba, responde solo: "No tienes acceso a esa información con tu rol." No des cifras, no supongas datos y no sugieras cómo obtenerlos.
+- Si la pregunta no es sobre la clínica, dilo y explica brevemente en qué sí puedes ayudar.
 - No inventes cifras: usa solo el resultado de la herramienta.
 
 Sedes disponibles para este usuario:
@@ -158,9 +216,17 @@ def _argumentos_seguros(argumentos) -> dict:
 
 def ejecutar_consulta(nombre: str, argumentos: dict, usuario) -> tuple[int, dict]:
     """Ejecuta una consulta analítica como si la pidiera el propio usuario."""
+    if nombre == registros.NOMBRE_HERRAMIENTA:
+        return registros.ejecutar(usuario, argumentos)
+    if nombre == estrategia.NOMBRE_HERRAMIENTA:
+        return estrategia.ejecutar(usuario, argumentos)
     config = HERRAMIENTAS.get(nombre)
     if config is None:
         return status.HTTP_400_BAD_REQUEST, {"error": "Consulta desconocida."}
+    if not puede_consultar(usuario, nombre):
+        return status.HTTP_403_FORBIDDEN, {
+            "error": "Tu rol no tiene acceso a esta información."
+        }
     parametros = {
         clave: valor
         for clave, valor in _argumentos_seguros(argumentos).items()
@@ -172,8 +238,75 @@ def ejecutar_consulta(nombre: str, argumentos: dict, usuario) -> tuple[int, dict
     return respuesta.status_code, respuesta.data
 
 
+MENSAJES_HISTORIAL = 10
+
+# Algunos modelos escriben la llamada a la herramienta como texto con marcas DSML en
+# lugar de devolver una llamada estructurada. El parseo es compartido con el agente de
+# WhatsApp (`api_agente.llamadas_textuales`); aquí se mantienen los alias locales.
+_llamadas_textuales = llamadas_textuales
+_sin_marcas = sin_marcas
+
+
+def _texto_de_respaldo(datos) -> str:
+    """
+    Respuesta armada con el resultado de la consulta, cuando el modelo no redacta texto
+    utilizable. Así el usuario siempre recibe el dato aunque la redacción falle.
+    """
+    if not isinstance(datos, dict) or "error" in datos:
+        return "No pude obtener esa información. Intenta preguntarlo de otra forma."
+    if "grupos" in datos:
+        lineas = [f"- {grupo['valor']}: {grupo['cantidad']}" for grupo in datos["grupos"]]
+        return f"Total: {datos['total']}.\n" + "\n".join(lineas)
+    if "registros" in datos:
+        cabecera = f"Encontré {datos['total']} registro(s) en {datos['entidad']}."
+        filas = [
+            f"{indice}. " + " · ".join(str(v) for v in fila.values() if v not in (None, ""))
+            for indice, fila in enumerate(datos["registros"], start=1)
+        ]
+        return "\n".join([cabecera, *filas])
+    if "tipo_grafica" in datos:
+        return f"{datos['titulo']}: total {datos['total']}."
+    if "secciones" in datos:
+        return "No pude redactar el análisis en este momento. Intenta pedirlo de nuevo."
+    return "No pude completar la consulta. Intenta preguntarlo de otra forma."
+
+
+def _historial(conversacion) -> list[dict]:
+    """Últimos mensajes de la conversación, solo texto, para dar contexto al modelo."""
+    if conversacion is None:
+        return []
+    ultimos = list(conversacion.mensajes.order_by("-creado", "-id")[:MENSAJES_HISTORIAL])
+    return [
+        {
+            "role": "user" if mensaje.rol == MensajeAsistente.Rol.USUARIO else "assistant",
+            "content": mensaje.texto,
+        }
+        for mensaje in reversed(ultimos)
+    ]
+
+
+def _responder_y_guardar(usuario, conversacion, pregunta, texto, grafica) -> Response:
+    """Guarda pregunta y respuesta solo si el LLM respondió (así no quedan preguntas huérfanas)."""
+    with transaction.atomic():
+        if conversacion is None:
+            conversacion = ConversacionAsistente.objects.create(
+                usuario=usuario, titulo=pregunta[:60]
+            )
+        conversacion.mensajes.create(rol=MensajeAsistente.Rol.USUARIO, texto=pregunta)
+        conversacion.mensajes.create(
+            rol=MensajeAsistente.Rol.ASISTENTE, texto=texto, grafica=grafica
+        )
+        conversacion.save(update_fields=["actualizada"])
+    return Response(
+        {"conversacion": conversacion.pk, "respuesta": texto, "grafica": grafica}
+    )
+
+
 class AsistenteView(APIView):
-    """POST /api/analitica/asistente/ con {"pregunta": "..."}."""
+    """
+    POST /api/analitica/asistente/ con {"pregunta": "...", "conversacion": id (opcional)}.
+    Sin `conversacion` se crea una conversación nueva. Las conversaciones son privadas.
+    """
 
     permission_classes = [IsAuthenticated]
 
@@ -189,14 +322,31 @@ class AsistenteView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        id_conversacion = request.data.get("conversacion")
+        conversacion = None
+        if id_conversacion not in (None, ""):
+            if not str(id_conversacion).isdigit():
+                return Response(
+                    {"conversacion": "Indica una conversación válida."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            conversacion = ConversacionAsistente.objects.filter(
+                usuario=request.user, pk=int(id_conversacion)
+            ).first()
+            if conversacion is None:
+                return Response(
+                    {"detail": "La conversación no existe."}, status=status.HTTP_404_NOT_FOUND
+                )
+
         mensajes = [
             {"role": "system", "content": _prompt_sistema(request.user)},
+            *_historial(conversacion),
             {"role": "user", "content": pregunta},
         ]
         sesion = f"ses_asistente_u{request.user.pk}"
 
         try:
-            mensaje = llm.chat(mensajes, _definiciones(), session_id=sesion)
+            mensaje = llm.chat(mensajes, _definiciones(request.user), session_id=sesion)
         except llm.LLMError:
             logger.exception("Fallo del LLM en el asistente interno")
             return Response(
@@ -204,10 +354,14 @@ class AsistenteView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        llamadas = mensaje.get("tool_calls") or []
+        llamadas = mensaje.get("tool_calls") or _llamadas_textuales(mensaje.get("content"))
         if not llamadas:
-            return Response(
-                {"respuesta": (mensaje.get("content") or "").strip(), "grafica": None}
+            return _responder_y_guardar(
+                request.user,
+                conversacion,
+                pregunta,
+                _sin_marcas(mensaje.get("content")),
+                None,
             )
 
         # Solo se ejecuta la primera consulta: una pregunta produce una gráfica.
@@ -218,11 +372,12 @@ class AsistenteView(APIView):
         except json.JSONDecodeError:
             argumentos = {}
         codigo, datos = ejecutar_consulta(funcion.get("name", ""), argumentos, request.user)
-        grafica = datos if codigo == status.HTTP_200_OK else None
+        # Solo las consultas analíticas (con tipo_grafica) generan gráfica; los registros no.
+        grafica = datos if codigo == status.HTTP_200_OK and "tipo_grafica" in datos else None
         resultado = json.dumps(datos, ensure_ascii=False, default=str)
 
         mensajes.append(
-            {"role": "assistant", "content": mensaje.get("content") or "", "tool_calls": [llamada]}
+            {"role": "assistant", "content": _sin_marcas(mensaje.get("content")), "tool_calls": [llamada]}
         )
         mensajes.append(
             {"role": "tool", "tool_call_id": llamada.get("id", ""), "content": resultado}
@@ -237,9 +392,45 @@ class AsistenteView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        return Response(
-            {
-                "respuesta": (final.get("content") or "").strip(),
-                "grafica": grafica,
-            }
+        texto_final = _sin_marcas(final.get("content")) or _texto_de_respaldo(datos)
+        return _responder_y_guardar(request.user, conversacion, pregunta, texto_final, grafica)
+
+
+class ConversacionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConversacionAsistente
+        fields = ["id", "titulo", "creada", "actualizada"]
+
+
+class MensajeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MensajeAsistente
+        fields = ["id", "rol", "texto", "grafica", "creado"]
+
+
+class ConversacionDetalleSerializer(ConversacionSerializer):
+    mensajes = MensajeSerializer(many=True, read_only=True)
+
+    class Meta(ConversacionSerializer.Meta):
+        fields = [*ConversacionSerializer.Meta.fields, "mensajes"]
+
+
+class ConversacionesView(generics.ListAPIView):
+    """Lista las conversaciones del usuario, la más reciente primero."""
+
+    serializer_class = ConversacionSerializer
+
+    def get_queryset(self):
+        return ConversacionAsistente.objects.filter(usuario=self.request.user)
+
+
+class ConversacionDetalleView(generics.RetrieveDestroyAPIView):
+    """Ver los mensajes de una conversación propia, o borrarla."""
+
+    serializer_class = ConversacionDetalleSerializer
+
+    def get_queryset(self):
+        return (
+            ConversacionAsistente.objects.filter(usuario=self.request.user)
+            .prefetch_related("mensajes")
         )

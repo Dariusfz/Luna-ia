@@ -123,6 +123,24 @@ class BucleDelAgenteTests(AgenteBase):
         self.assertEqual(resultado, "Listo")
         self.assertIn("desconocida", self.contenido_de_herramienta(chat)["error"])
 
+    def test_llamada_escrita_como_texto_se_ejecuta_y_no_llega_al_paciente(self):
+        self.mensaje_paciente("¿qué sedes tienen?")
+        dsml = (
+            'Voy a revisar.'
+            '<｜DSML｜invoke name="listar_sedes">'
+            '</｜DSML｜invoke>'
+        )
+        resultado, chat = self.responder_con([texto(dsml), texto("Tenemos San Pedro.")])
+        self.assertEqual(resultado, "Tenemos San Pedro.")
+        self.assertEqual(self.contenido_de_herramienta(chat)["resultado"][0]["nombre"], "San Pedro")
+
+    def test_marcas_de_llamada_no_llegan_al_paciente(self):
+        self.mensaje_paciente("hola")
+        resultado, _ = self.responder_con([
+            texto('Hola</｜DSML｜invoke>')
+        ])
+        self.assertEqual(resultado, "Hola")
+
 
 class PacientesDelRemitenteTests(AgenteBase):
     def test_solo_muestra_pacientes_del_numero_que_escribe(self):
