@@ -205,6 +205,18 @@ EVOLUTION_API_KEY = env("EVOLUTION_API_KEY", default="")
 EVOLUTION_INSTANCE = env("EVOLUTION_INSTANCE", default="luna-ia")
 EVOLUTION_WEBHOOK_SECRET = env("EVOLUTION_WEBHOOK_SECRET", default="")
 
+# Mensajes de WhatsApp que llegan con retraso (por ejemplo, los que Evolution
+# acumula mientras el proyecto está apagado): si son más viejos que esto, se
+# ignoran y el agente no responde. El mensaje debe seguir siendo reciente para
+# atenderlo. Ver api_agente/vigencia.py.
+WHATSAPP_MENSAJE_MAX_ANTIGUEDAD_SEGUNDOS = env.int(
+    "WHATSAPP_MENSAJE_MAX_ANTIGUEDAD_SEGUNDOS", default=300
+)
+# Margen para no descartar mensajes legítimos enviados justo antes de arrancar.
+WHATSAPP_ARRANQUE_TOLERANCIA_SEGUNDOS = env.int(
+    "WHATSAPP_ARRANQUE_TOLERANCIA_SEGUNDOS", default=90
+)
+
 # Número(s) de WhatsApp que reciben los avisos internos del agente (citas nuevas,
 # tratamientos no disponibles). Separados por coma. Vacío = no se envía nada.
 ADMIN_WHATSAPP = env("ADMIN_WHATSAPP", default="")

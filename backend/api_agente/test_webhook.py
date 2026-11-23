@@ -1,8 +1,10 @@
 import base64
+from datetime import timedelta
 from unittest.mock import patch
 
 import httpx
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from . import evolution, tasks, transcripcion
@@ -15,14 +17,23 @@ TELEFONO = "+50499999999"
 JID = "50499999999@s.whatsapp.net"
 
 
-def evento(texto="Hola", *, jid=JID, from_me=False, wa_id="MSG1", tipo_wa="conversation", evento="messages.upsert"):
+def evento(
+    texto="Hola",
+    *,
+    jid=JID,
+    from_me=False,
+    wa_id="MSG1",
+    tipo_wa="conversation",
+    evento="messages.upsert",
+    timestamp=None,
+):
     if tipo_wa == "conversation":
         mensaje = {"conversation": texto}
     elif tipo_wa == "extendedTextMessage":
         mensaje = {"extendedTextMessage": {"text": texto}}
     else:
         mensaje = {"audioMessage": {"mimetype": "audio/ogg; codecs=opus"}}
-    return {
+    datos = {
         "event": evento,
         "instance": "luna-ia",
         "data": {
@@ -32,6 +43,9 @@ def evento(texto="Hola", *, jid=JID, from_me=False, wa_id="MSG1", tipo_wa="conve
             "pushName": "Ana",
         },
     }
+    if timestamp is not None:
+        datos["data"]["messageTimestamp"] = timestamp
+    return datos
 
 
 @override_settings(EVOLUTION_WEBHOOK_SECRET=SECRETO, ADMIN_WHATSAPP="")
@@ -180,6 +194,41 @@ class WebhookEvolutionTests(TestCase):
         self.api.post(URL, datos, format="json")
         self.assertFalse(MensajeWhatsApp.objects.exists())
 
+    def test_mensaje_antiguo_se_ignora_sin_guardar_ni_encolar(self):
+        atrasado = (timezone.now() - timedelta(hours=2)).timestamp()
+        with self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.api.post(
+                URL, evento("Hola, escrito ayer", wa_id="VIEJO", timestamp=atrasado), format="json"
+            )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertFalse(ConversacionWhatsApp.objects.exists())
+        self.assertFalse(MensajeWhatsApp.objects.exists())
+        self.delay_texto.assert_not_called()
+
+    def test_mensaje_reciente_con_marca_temporal_se_procesa(self):
+        ahora = timezone.now().timestamp()
+        with self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.api.post(
+                URL, evento("Hola de ahora", wa_id="NUEVO", timestamp=ahora), format="json"
+            )
+        self.assertEqual(respuesta.status_code, 200)
+        mensaje = MensajeWhatsApp.objects.get(wa_message_id="NUEVO")
+        self.delay_texto.assert_called_once_with(mensaje.pk)
+
+    def test_mensaje_anterior_al_arranque_se_ignora(self):
+        with patch("api_agente.vigencia.ARRANQUE", timezone.now()), override_settings(
+            WHATSAPP_MENSAJE_MAX_ANTIGUEDAD_SEGUNDOS=3600,
+            WHATSAPP_ARRANQUE_TOLERANCIA_SEGUNDOS=30,
+        ):
+            marca = (timezone.now() - timedelta(minutes=5)).timestamp()
+            with self.captureOnCommitCallbacks(execute=True):
+                respuesta = self.api.post(
+                    URL, evento("Hola antes de reiniciar", wa_id="PREVIO", timestamp=marca), format="json"
+                )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertFalse(MensajeWhatsApp.objects.exists())
+        self.delay_texto.assert_not_called()
+
 
 class ProcesarMensajeTests(TestCase):
     def setUp(self):
@@ -198,6 +247,16 @@ class ProcesarMensajeTests(TestCase):
         enviar.assert_called_once_with(TELEFONO, "Hola, ¿en qué te ayudo?")
         respuesta = self.conversacion.mensajes.get(rol=MensajeWhatsApp.Rol.AGENTE)
         self.assertEqual(descifrar(respuesta.contenido_cifrado), "Hola, ¿en qué te ayudo?")
+
+    @patch("api_agente.evolution.enviar_texto")
+    @patch("api_agente.agente.responder")
+    def test_no_responde_mensaje_antiguo_que_quedo_en_la_cola(self, responder, enviar):
+        MensajeWhatsApp.objects.filter(pk=self.mensaje.pk).update(
+            creado=timezone.now() - timedelta(hours=2)
+        )
+        tasks.procesar_texto(self.mensaje.pk)
+        responder.assert_not_called()
+        enviar.assert_not_called()
 
     @patch("api_agente.evolution.enviar_texto", return_value="SENT1")
     @patch(

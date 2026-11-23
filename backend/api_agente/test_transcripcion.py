@@ -31,9 +31,11 @@ class ModeloFalso:
 class TranscripcionTests(SimpleTestCase):
     def setUp(self):
         transcripcion._modelo = None
+        transcripcion._modelo_forzado_cpu = False
 
     def tearDown(self):
         transcripcion._modelo = None
+        transcripcion._modelo_forzado_cpu = False
 
     def test_audio_vacio_no_carga_el_modelo(self):
         with patch.object(transcripcion, "_cargar_modelo") as cargar:
@@ -61,6 +63,25 @@ class TranscripcionTests(SimpleTestCase):
         transcripcion._modelo = ModeloFalso(error=RuntimeError("sin GPU"))
         with self.assertRaises(transcripcion.TranscripcionError):
             transcripcion.transcribir(b"ogg")
+
+    def test_si_falla_cublas_al_transcribir_se_reintenta_en_cpu(self):
+        falla_gpu = ModeloFalso(
+            error=RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        )
+        cpu = ModeloFalso(["Hola desde CPU"])
+        transcripcion._modelo = falla_gpu
+        with patch.object(transcripcion, "_crear_modelo", return_value=cpu) as crear:
+            self.assertEqual(transcripcion.transcribir(b"ogg"), "Hola desde CPU")
+        self.assertEqual(crear.call_args.args, ("cpu", "int8"))
+        self.assertIs(transcripcion._modelo, cpu)
+        self.assertTrue(transcripcion._modelo_forzado_cpu)
+
+    def test_si_el_error_no_es_de_gpu_no_reintenta(self):
+        transcripcion._modelo = ModeloFalso(error=RuntimeError("audio corrupto"))
+        with patch.object(transcripcion, "_crear_modelo") as crear:
+            with self.assertRaises(transcripcion.TranscripcionError):
+                transcripcion.transcribir(b"ogg")
+        crear.assert_not_called()
 
     def test_si_falta_faster_whisper_se_avisa(self):
         with patch.dict(sys.modules, {"faster_whisper": None}):

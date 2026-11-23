@@ -116,3 +116,26 @@ export const crearOdontograma = (datos: DatosOdontograma) =>
 
 export const actualizarOdontograma = (id: number, datos: Partial<DatosOdontograma>) =>
   api<Odontograma>(`/odontogramas/${id}/`, { method: 'PATCH', json: datos })
+
+export type CambioHistorial = {
+  campo: string
+  antes: unknown
+  despues: unknown
+}
+
+export type RegistroHistorial = {
+  id: number
+  fecha: string
+  tipo: '+' | '~' | '-'
+  tipo_nombre: string
+  usuario: string | null
+  usuario_nombre: string
+  motivo: string
+  cambios: CambioHistorial[]
+}
+
+export const historialHistoria = (id: number) =>
+  api<RegistroHistorial[]>(`/historias-clinicas/${id}/historial/`)
+
+export const historialOdontograma = (id: number) =>
+  api<RegistroHistorial[]>(`/odontogramas/${id}/historial/`)

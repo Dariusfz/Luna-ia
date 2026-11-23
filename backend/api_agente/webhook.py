@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from .cifrado import cifrar
 from .models import ConversacionWhatsApp, MensajeWhatsApp
 from .tasks import procesar_audio, procesar_texto
+from . import vigencia
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,15 @@ class WebhookEvolutionView(APIView):
             return Response(status=status.HTTP_200_OK)
 
         if not wa_id or (tipo == MensajeWhatsApp.Tipo.TEXTO and not texto.strip()):
+            return Response(status=status.HTTP_200_OK)
+
+        # Mensajes que Evolution acumuló mientras el proyecto estaba apagado: son
+        # viejos y responderlos continuaría hilos que ya terminaron.
+        motivo = vigencia.motivo_para_ignorar(
+            {**mensaje_data, "date_time": mensaje_data.get("date_time") or datos.get("date_time")}
+        )
+        if motivo:
+            logger.info("Mensaje de WhatsApp ignorado (%s): %s", motivo, wa_id)
             return Response(status=status.HTTP_200_OK)
 
         telefono = _telefono_desde_jid(jid)

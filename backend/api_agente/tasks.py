@@ -3,7 +3,7 @@ import logging
 import httpx
 from celery import shared_task
 
-from . import agente, evolution, transcripcion
+from . import agente, evolution, transcripcion, vigencia
 from .cifrado import cifrar
 from .models import MensajeWhatsApp
 
@@ -49,6 +49,10 @@ def _ultimo_mensaje_es_del_paciente(conversacion) -> bool:
 )
 def procesar_texto(self, mensaje_id: int) -> None:
     mensaje = MensajeWhatsApp.objects.select_related("conversacion").get(pk=mensaje_id)
+    if not vigencia.mensaje_vigente(mensaje):
+        # Tarea que quedó en el broker mientras el sistema estaba apagado.
+        logger.info("Mensaje %s demasiado antiguo; no se responde", mensaje.pk)
+        return
     if not mensaje.conversacion.agente_activo:
         # Una persona tomó el hilo mientras el mensaje esperaba en cola.
         logger.info("Conversación %s atendida por personal; no se responde", mensaje.conversacion_id)
@@ -77,6 +81,9 @@ def procesar_audio(self, mensaje_id: int) -> None:
     """
     mensaje = MensajeWhatsApp.objects.select_related("conversacion").get(pk=mensaje_id)
     conversacion = mensaje.conversacion
+    if not vigencia.mensaje_vigente(mensaje):
+        logger.info("Audio %s demasiado antiguo; no se responde", mensaje.pk)
+        return
     if not conversacion.agente_activo:
         return
     if not _ultimo_mensaje_es_del_paciente(conversacion):

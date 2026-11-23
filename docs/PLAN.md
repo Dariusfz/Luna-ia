@@ -101,6 +101,7 @@ LLM_MODEL=llama3.1:8b                   # dev; en prod el modelo de la API
 - **Contexto y ejemplos (few-shot):** `api_agente/contexto.py` contiene pares mensaje del paciente / respuesta esperada que se añaden al prompt en cada llamada. Se editan sin tocar la lógica y no se guardan en la BD.
 - **Tabla de conversaciones:** `ConversacionWhatsApp` y `MensajeWhatsApp` en PostgreSQL, con contenido cifrado y retención configurable (por defecto 90 días).
 - **Atención humana por hilo (06/11/2026):** `ConversacionWhatsApp.agente_activo`. Si una persona escribe desde el WhatsApp de la clínica, el hilo se pausa solo; las respuestas del propio agente se reconocen por `wa_message_id` y no lo pausan. Desde el admin se puede pausar/reactivar. Con el hilo pausado, los mensajes del paciente se guardan pero el agente no responde.
+- **Mensajes viejos al reiniciar (23/11/2026):** Evolution entrega al reconectar los mensajes acumulados mientras el proyecto estaba apagado. `api_agente/vigencia.py` los descarta antes de guardarlos/encolarlos si superan `WHATSAPP_MENSAJE_MAX_ANTIGUEDAD_SEGUNDOS` (300 s por defecto) o si su marca de tiempo es anterior al arranque del proceso (`WHATSAPP_ARRANQUE_TOLERANCIA_SEGUNDOS`, 90 s). Las tareas de Celery que quedaron en el broker al apagar también se omiten al ejecutarse si el mensaje ya es viejo. Así el agente solo responde conversaciones activas, no hilos que quedaron pendientes de una sesión anterior.
 
 ### 5.3 Audio (notas de voz)
 Flujo: webhook de Evolution → tarea Celery en cola `audio` → descarga del audio (base64, en memoria) → **faster-whisper** (`language="es"`, `vad_filter=True`) → texto → entra al agente como mensaje normal.
@@ -303,7 +304,7 @@ git push -u origin main
 
 ## 15. Estado de implementación (avance real)
 
-> Actualizado: 19/11/2026. Esta sección describe **qué existe ya en el código**, para que quien retome el proyecto no repita trabajo. Lo planificado está arriba; aquí va lo construido y lo que falta.
+> Actualizado: 23/11/2026. Esta sección describe **qué existe ya en el código**, para que quien retome el proyecto no repita trabajo. Lo planificado está arriba; aquí va lo construido y lo que falta.
 
 ### 15.1 Puesta en marcha en desarrollo (Windows)
 
@@ -326,13 +327,14 @@ ollama pull llama3.1:8b
 
 - Evolution API: `http://127.0.0.1:8080` (manager en `/manager`, apikey en `infra/.env`). Imagen `evoapicloud/evolution-api:v2.3.7`: las versiones `v2.1.x`/`v2.2.x` de `atendai/evolution-api` ya no existen en Docker Hub o tienen un bucle de reconexión que impide generar el QR.
 - La instancia de WhatsApp se llama `luna-ia` y su webhook apunta a `http://host.docker.internal:8000/api/agente/webhook/evolution/<secreto>/`. El webhook se configura con body anidado en `POST /webhook/set/luna-ia` (`{"webhook": {...}}`); con el body plano devuelve 400.
-- `backend/.env` añade, además de lo de la sección 14.1: `MENSAJES_ENCRYPTION_KEY` (si falta se deriva de `DJANGO_SECRET_KEY`), `EVOLUTION_BASE_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE`, `EVOLUTION_WEBHOOK_SECRET`, `LLM_TIMEOUT_SEGUNDOS=120` y `WHISPER_MODEL`/`WHISPER_DEVICE`/`WHISPER_COMPUTE_TYPE`/`WHISPER_LANGUAGE`/`WHISPER_BEAM_SIZE` (por defecto `small`, `auto`, `int8`, `es`, `5`).
+- `backend/.env` añade, además de lo de la sección 14.1: `MENSAJES_ENCRYPTION_KEY` (si falta se deriva de `DJANGO_SECRET_KEY`), `EVOLUTION_BASE_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE`, `EVOLUTION_WEBHOOK_SECRET`, `LLM_TIMEOUT_SEGUNDOS=120`, `WHATSAPP_MENSAJE_MAX_ANTIGUEDAD_SEGUNDOS`/`WHATSAPP_ARRANQUE_TOLERANCIA_SEGUNDOS` (por defecto `300` y `90`) y `WHISPER_MODEL`/`WHISPER_DEVICE`/`WHISPER_COMPUTE_TYPE`/`WHISPER_LANGUAGE`/`WHISPER_BEAM_SIZE` (por defecto `small`, `auto`, `int8`, `es`, `5`).
 
 ### 15.2 Qué está implementado
 
 - **ERP previo:** usuarios con 2FA, sedes, pacientes, agenda, servicios, tratamientos, inventario, pagos, documentos, analítica de consulta y auditoría. Dirección del paciente obligatoria en modelo y en BD (`CheckConstraint`).
 - **`api_agente` completo para texto y audio:**
-  - `webhook.py`: valida el secreto de la ruta con `hmac.compare_digest`, ignora grupos y tipos no soportados, deduplica por `wa_message_id` y encola en Celery.
+  - `webhook.py`: valida el secreto de la ruta con `hmac.compare_digest`, ignora grupos y tipos no soportados, deduplica por `wa_message_id` y encola en Celery. Antes de guardar, `vigencia.motivo_para_ignorar` descarta los mensajes atrasados o anteriores al arranque (ver 5.2).
+  - `vigencia.py`: filtros de mensajes viejos por marca de tiempo de Evolution y por hora de creación de la tarea en cola (`mensaje_vigente`).
   - `evolution.py`: `enviar_texto` (devuelve el id del mensaje para reconocer su eco) y `descargar_audio`.
   - `llm.py`: cliente compatible-OpenAI con `httpx`; todo por `LLM_*`.
   - `herramientas.py` y `agente.py`: bucle LLM + tools con máximo de 5 iteraciones y 12 mensajes de contexto.
@@ -352,7 +354,10 @@ ollama pull llama3.1:8b
   - `asistente.py`: vista `POST /api/analitica/asistente/`, prompt por rol, persistencia de conversaciones (`ConversacionAsistente`/`MensajeAsistente`, últimos 10 mensajes), endpoints `asistente/conversaciones/` (listar, ver, borrar; privadas por usuario), 503 si el LLM falla y respaldo con los datos si la redacción sale vacía.
   - **Llamadas escritas como texto:** si el modelo devuelve la llamada con marcas DSML en el contenido, se parsea y se ejecuta (`api_agente/llamadas_textuales.py`, compartido con el agente de WhatsApp). Las marcas nunca llegan al usuario.
   - **Frontend:** `frontend/src/paginas/Asistente.tsx` (chat, gráficas con color por categoría, historial de conversaciones, sugerencias por rol) y entrada "Asistente IA" en el menú.
-- **Tests:** 457 en total, todos en verde. `analitica` cubre formato de endpoints, permisos por rol y sede, registros, llamadas textuales, conversaciones, proyecciones y contenido del análisis estratégico; `api_agente` cubre webhook, deduplicación, cifrado, borradores, confirmación explícita, aislamiento de pacientes por teléfono, pausa del agente, limpieza de ` thinking`, argumentos inválidos, alta de pacientes, cancelación/modificación de citas, avisos al administrador y transcripción de audio (caché del modelo, idioma, VAD, fallos y respaldo).
+- **Historia clínica y odontograma (23/11/2026):** modelos `HistoriaClinica`, `Odontograma` y `HallazgoDental` (numeración FDI 11-48 y 51-85, caras y estados) con `simple-history`, migración `pacientes.0006`; endpoints `/api/historias-clinicas/` y `/api/odontogramas/` con filtros por paciente/sede/fecha y acción `historial/` para auditoría. La pantalla `HistoriaClinica.tsx` permite buscar al paciente, registrar entradas con todos sus campos, editarlas sin borrarlas, ver la auditoría de cada registro y guardar odontogramas.
+  - **Odontograma animado e interactivo (`componentes/OdontogramaDental.tsx`):** dibuja las piezas con SVG y una animación de entrada escalonada; alterna dentición permanente/temporal; las piezas con hallazgos se pintan con el color del estado registrado (leyenda incluida) y muestran un contador si tienen varios. En los odontogramas guardados, al hacer clic en una pieza se abre un Popover con su información; los hallazgos también se listan como etiquetas con botón para quitarlos. En el editor, el clic selecciona la pieza para agregar/quitar hallazgos por cara, estado y observación. Los odontogramas guardados se pueden editar (PATCH que reemplaza los hallazgos) o eliminar hallazgos sueltos sin abrir el editor. Incluye "Copiar último" para partir del odontograma anterior.
+  - **Corrección del guardado (23/11/2026):** los formularios de historia y odontograma usan `forceRender` para que `setFieldsValue` se aplique con el formulario montado, y `validateFields` se captura para que un campo inválido muestre el error en vez de dejar el modal sin respuesta. El odontograma ya no usa un formulario anidado: los hallazgos viven en estado de React y se envían al guardar.
+- **Tests:** 477 en total, todos en verde. `analitica` cubre formato de endpoints, permisos por rol y sede, registros, llamadas textuales, conversaciones, proyecciones y contenido del análisis estratégico; `api_agente` cubre webhook, deduplicación, cifrado, borradores, confirmación explícita, aislamiento de pacientes por teléfono, pausa del agente, limpieza de ` thinking`, argumentos inválidos, alta de pacientes, cancelación/modificación de citas, avisos al administrador, transcripción de audio (caché del modelo, idioma, VAD, fallos y respaldo) y descarte de mensajes atrasados o anteriores al arranque; `pacientes` cubre historia clínica y odontograma.
 
 ### 15.3 Cómo probar el agente
 
@@ -363,10 +368,12 @@ ollama pull llama3.1:8b
 5. Prueba sin WhatsApp ni BD: `manage.py probar_llm --respuestas`.
 6. Para enseñar una respuesta nueva: agregar la tupla `(mensaje, respuesta)` en `api_agente/contexto.py`. No hace falta migración ni reiniciar el worker si solo se cambian ejemplos (el módulo se recarga con el proceso; reiniciar el worker si se editó mientras corría).
 7. Para probar el audio: enviar una nota de voz con el worker escuchando también la cola `audio` (`-Q default,audio`). La primera vez descarga el modelo de Whisper y tarda más. Si la transcripción falla o no se entiende, el agente pide que se lo escriban.
+8. Para probar el filtro de mensajes viejos: apagar Django y el worker, escribir por WhatsApp y volver a arrancar. Al reconectar, Evolution reenvía el evento con una marca de tiempo antigua: el webhook debe registrarlo en el log como ignorado y no debe aparecer respuesta. Con un mensaje nuevo (enviado con el sistema encendido) el agente responde normal.
 
 ### 15.4 Límites conocidos y pendientes
 
-- **Audio:** implementado con `faster-whisper` (ver 15.2). La primera transcripción descarga el modelo a la caché de Hugging Face (decenas o cientos de MB según `WHISPER_MODEL`); si no está instalado `faster-whisper`, el agente pide al paciente que escriba en vez de romper el worker. El audio nunca se guarda en disco ni en BD: solo el texto transcrito. Verificado de punta a punta con un WAV en español (`tiny`, CPU). Se fija `av>=11,<17` porque PyAV 19 rechaza `metadata_errors`, que faster-whisper usa al decodificar.
+- **Audio:** implementado con `faster-whisper` (ver 15.2). La primera transcripción descarga el modelo a la caché de Hugging Face (decenas o cientos de MB según `WHISPER_MODEL`); si no está instalado `faster-whisper`, el agente pide al paciente que escriba en vez de romper el worker. El audio nunca se guarda en disco ni en BD: solo el texto transcrito. Verificado de punta a punta con un WAV en español (`tiny`, CPU). Se fija `av>=11,<17` porque PyAV 19 rechaza `metadata_errors`, que faster-whisper usa al decodificar. Si la GPU carga el modelo pero falla al transcribir (caso típico en Windows: `Library cublas64_12.dll is not found`), `transcripcion.py` recarga el modelo en CPU y reintenta una vez; el proceso queda en CPU. En máquinas sin cuBLAS conviene poner `WHISPER_DEVICE=cpu` para no perder el primer intento.
+- **Mensajes al reiniciar:** el filtro de `vigencia.py` es por tiempo: se ignoran los mensajes con más de `WHATSAPP_MENSAJE_MAX_ANTIGUEDAD_SEGUNDOS` (300 s) y los enviados más de `WHATSAPP_ARRANQUE_TOLERANCIA_SEGUNDOS` (90 s) antes de arrancar. Subir o bajar esas variables ajusta el rigor; el filtro no borra la conversación existente, solo evita responder mensajes viejos.
 - **Notificaciones internas:** `api_agente/notificaciones.py` avisa por WhatsApp al número de `ADMIN_WHATSAPP` cuando el agente crea, modifica o cancela una cita, o cuando el paciente pide un tratamiento fuera del catálogo. Es informativo: si el envío falla, la acción del paciente no se interrumpe. Los recordatorios programados seguirán en n8n.
 - **Honorario de las citas creadas por el agente:** se guarda en 0 y el personal lo ajusta después.
 - **Dirección del paciente:** si no la da, se guarda la de la sede (no la suya). Conviene que recepción la corrija.
@@ -374,7 +381,7 @@ ollama pull llama3.1:8b
 - **Panel de pausa:** solo existe en el admin de Django; falta el botón en el frontend.
 - **Modelo:** `llama3.1:8b` a veces llama una herramienta innecesaria (por ejemplo `listar_sedes` al saludar o `cancelar_accion` ante un dolor). La respuesta final es correcta, pero gasta una llamada extra. Si molesta, filtrar por intención antes de darle tools. También tiende a rellenar huecos con datos inventados: por eso las guardas de Django son la defensa real, no el prompt.
 - **Contexto:** los ejemplos son few-shot en `contexto.py`. No se usa `pgvector`: con decenas de casos no aporta y añade infraestructura. Si algún día hay cientos de políticas o preguntas frecuentes para recuperar, ahí sí conviene RAG con `pgvector`.
-- **Git:** último commit `7b72bc3` (asistente IA). Los cambios de audio de esta sesión siguen sin commitear (`api_agente/transcripcion.py`, `test_transcripcion.py`, `tasks.py`, `test_tasks.py`, `test_webhook.py`, `settings.py`, `requirements*.txt`, `.env.example`, `AGENTS.md` y este plan).
+- **Git:** último commit `9306276` (historia clínica y odontograma). Quedan sin commitear los cambios del 23/11: `api_agente/vigencia.py`, filtros en `webhook.py`/`tasks.py`, reintento GPU→CPU en `transcripcion.py` con sus tests, `settings.py`, `.env.example`, los componentes del odontograma (`OdontogramaDental.tsx`, `odontogramaConstantes.ts`), `historiaClinica.ts`, `HistoriaClinica.tsx` y este plan.
 
 ### 15.5 Cómo probar el asistente interno
 
@@ -387,20 +394,24 @@ ollama pull llama3.1:8b
 
 ### 15.6 Punto de retorno (próxima sesión)
 
-**Estado al cierre del 19/11/2026:** asistente interno con análisis estratégico, gráficas con color por categoría y audio del agente con `faster-whisper` implementados. 457 tests en verde. `faster-whisper 1.2.1` y `av 16.1.0` instalados en el venv.
+**Estado al cierre del 23/11/2026:** historia clínica y odontograma completos (odontograma animado con dentición permanente/temporal, colores por estado, detalle al clic, edición de odontogramas guardados y borrado de hallazgos, auditoría con `simple-history`); guardado corregido y migración `pacientes.0006` aplicada en la BD local. Agente: filtro de mensajes viejos al reiniciar (`vigencia.py`) y reintento de Whisper en CPU cuando la GPU falla por `cublas64_12.dll`. 477 tests en verde.
 
 **Primero, antes de seguir:**
-1. Commitear los cambios de audio (están sin commitear; ver 15.4).
-2. Reiniciar `runserver` y el worker con `-Q default,audio`, y probar una nota de voz real por WhatsApp.
-3. `WHISPER_MODEL` ya usa `small` por defecto; el `tiny` solo se usó para la prueba rápida. Si la máquina va justa de recursos, `base` es más liviano.
+1. Commitear los cambios pendientes del 23/11 (ver 15.4).
+2. En cualquier máquina nueva, correr `manage.py migrate` (incluye `pacientes.0006`; sin ella, guardar historia/odontograma falla).
+3. Reiniciar `runserver` y el worker con `-Q default,audio`. En esta máquina, poner `WHISPER_DEVICE=cpu` en `backend/.env` (no tiene cuBLAS para GPU), o dejar que el reintento automático pase a CPU.
+4. Si el agente no recibe mensajes, revisar primero la sesión de WhatsApp de Evolution (instancia `open` pero sin eventos): reiniciar desde `/manager` o con `POST /instance/restart/luna-ia`, y confirmar que el hilo tenga `agente_activo` marcado.
 
-**Bloqueo externo:** la cuenta de LLM `opencode-go` agotó el límite mensual (429; se reinicia ~3 días después del 19/11). Mientras tanto el asistente responde 503 y el agente usa sus respuestas de respaldo. Para seguir probando sin esperar, usar Ollama local (`LLM_PROVIDER=ollama`, `LLM_BASE_URL=http://127.0.0.1:11434/v1`, `LLM_MODEL=llama3.1:8b`).
+**Incidencia 23/11/2026 (entorno, no código):** Evolution/Baileys dejó de entregar mensajes nuevos aunque la instancia figuraba `open`; su BD no registraba mensajes desde las 11:00. Se reinició la instancia y volvió a `open`. Los chats de prueba quedaron pausados (`agente_activo=False`), lo que también impide respuesta. El reinicio de la instancia no borra la sesión ni el webhook.
 
-> **Nota 21/11/2026 — modelo gratuito:** `deepseek-v4.1-flash-free` **no** está incluido en el plan OpenCode Go; el endpoint `https://opencode.ai/inference/go/openai/v1` devuelve 400 (`isn't included in OpenCode Go`). Solo sirve `deepseek-v4.1-flash` (de pago), que al 21/11 sigue en 429 (`GoUsageLimitError`, reinicia en ~2 días). Además, el endpoint exige la cabecera `x-opencode-session` en cada petición.
-> **Decisión 21/11/2026:** mientras dura el 429, `backend/.env` queda en Ollama local (`LLM_PROVIDER=ollama`, `LLM_MODEL=llama3.1:8b`); las variables de OpenCode Go se dejan comentadas para volver con una sola edición.
+**Bloqueo externo (LLM):** la cuenta `opencode-go` agotó su límite mensual el 19/11 (429). Mientras dure el bloqueo, `backend/.env` usa Ollama local (`LLM_PROVIDER=ollama`, `LLM_MODEL=llama3.1:8b`); las variables de OpenCode Go quedan comentadas para volver con una sola edición.
+
+> **Nota 21/11/2026 — modelo gratuito:** `deepseek-v4.1-flash-free` **no** está incluido en el plan OpenCode Go; el endpoint `https://opencode.ai/inference/go/openai/v1` devuelve 400 (`isn't included in OpenCode Go`). Solo sirve `deepseek-v4.1-flash` (de pago). Además, el endpoint exige la cabecera `x-opencode-session` en cada petición.
 
 **Siguiente según cronograma (S6, 19–25 nov):**
-1. Historia clínica + odontograma (núcleo de la semana).
-2. Endurecimiento de seguridad (incluye el test 2FA intermitente de `users`).
+1. ~~Historia clínica + odontograma~~ — **hecho 23/11/2026** (ver 15.2). Falta probarlo manualmente en el navegador con datos reales y una nota de voz.
+2. Endurecimiento de seguridad (incluye el test 2FA intermitente de `users`). **Prioridad para los próximos días.**
 3. Inventario (marcado como "deseable": posponer si aprieta el tiempo).
 4. Menores: botón de pausa del agente en el frontend, retención de conversaciones del asistente y revisión de `procesar_audio` en producción (el plan prevé cambiar Whisper por una API de STT).
+
+**Después (S7, 26 nov–5 dic):** pruebas integrales, corregir hallazgos, ensayo de demo y cierre documental (informe final, manual de usuario, capturas).
