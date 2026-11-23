@@ -1,3 +1,4 @@
+import logging
 import secrets
 from datetime import timedelta
 
@@ -10,6 +11,8 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .models import Invitacion, Usuario
+
+logger = logging.getLogger(__name__)
 
 
 def crear_invitacion(*, email, rol, sedes, creada_por):
@@ -28,16 +31,26 @@ def crear_invitacion(*, email, rol, sedes, creada_por):
         invitacion.sedes.set(sedes)
 
     enlace = f"{settings.FRONTEND_URL}/aceptar-invitacion?token={token}"
-    send_mail(
-        subject="Invitación a LUNA-IA",
-        message=(
-            "Has sido invitado al sistema de la clínica.\n\n"
-            f"Para crear tu cuenta abre este enlace (válido {horas} horas):\n{enlace}\n\n"
-            "Si no esperabas este correo, ignóralo."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[email],
-    )
+    try:
+        send_mail(
+            subject="Invitación a LUNA-IA",
+            message=(
+                "Has sido invitado al sistema de la clínica.\n\n"
+                f"Para crear tu cuenta abre este enlace (válido {horas} horas):\n{enlace}\n\n"
+                "Si no esperabas este correo, ignóralo."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+        )
+    except Exception as error:
+        # Si el correo no sale, la invitación no sirve: se borra para no dejar basura
+        # ni hacer creer al administrador que el enlace llegó.
+        logger.exception("No se pudo enviar la invitación a %s", email)
+        invitacion.delete()
+        raise serializers.ValidationError(
+            "No se pudo enviar el correo de invitación. Revisa la configuración SMTP "
+            "(EMAIL_HOST, EMAIL_PORT, EMAIL_HOST_USER y EMAIL_HOST_PASSWORD) y vuelve a intentarlo."
+        ) from error
     return invitacion
 
 

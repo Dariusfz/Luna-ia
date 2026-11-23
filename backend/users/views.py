@@ -1,4 +1,5 @@
-﻿from django.conf import settings
+﻿from axes.handlers.proxy import AxesProxyHandler
+from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.db.models import Q
 from django.utils import timezone
@@ -98,19 +99,43 @@ def csrf(request):
     return Response({"detail": "ok"})
 
 
+def _respuesta_bloqueo():
+    """Respuesta estándar cuando django-axes bloqueó el par usuario+IP."""
+    enfriamiento = settings.AXES_COOLOFF_TIME
+    detalle = "Demasiados intentos fallidos."
+    segundos = 0
+    if enfriamiento:
+        segundos = int(enfriamiento.total_seconds())
+        if segundos >= 60:
+            detalle += f" Intenta de nuevo en {segundos // 60} minutos."
+        else:
+            detalle += f" Intenta de nuevo en {segundos} segundos."
+    respuesta = Response({"detail": detalle}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+    if segundos:
+        respuesta["Retry-After"] = str(segundos)
+    return respuesta
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
         datos = LoginSerializer(data=request.data)
         datos.is_valid(raise_exception=True)
-        usuario = authenticate(
-            request,
-            username=datos.validated_data["username"],
-            password=datos.validated_data["password"],
-        )
+        credenciales = {
+            "username": datos.validated_data["username"],
+            "password": datos.validated_data["password"],
+        }
+        # Antes de tocar la contraseña: si el par usuario+IP está bloqueado por
+        # django-axes, no se revela si la contraseña era correcta.
+        if AxesProxyHandler.is_locked(request, credenciales):
+            return _respuesta_bloqueo()
+
+        usuario = authenticate(request, **credenciales)
         # Mensaje genérico para no revelar qué usuarios existen.
         if usuario is None:
+            if AxesProxyHandler.is_locked(request, credenciales):
+                return _respuesta_bloqueo()
             return Response(
                 {"detail": "Usuario o contraseña incorrectos."},
                 status=status.HTTP_400_BAD_REQUEST,

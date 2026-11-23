@@ -37,6 +37,33 @@ CSRF_TRUSTED_ORIGINS = env.list(
     ],
 )
 
+# --- Cookies, sesión y transporte (plan §6) ---------------------------------
+# La cookie de sesión nunca es accesible desde JavaScript. La de CSRF sí debe serlo
+# porque el frontend lee `csrftoken` para enviar el encabezado X-CSRFToken.
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = False
+SESSION_COOKIE_SAMESITE = env("SESSION_COOKIE_SAMESITE", default="Lax")
+CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax")
+# En producción (DEBUG=False) las cookies viajan solo por HTTPS. Se puede forzar
+# con SESSION_COOKIE_SECURE/CSRF_COOKIE_SECURE=False para una demo local sin TLS.
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not DEBUG)
+CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=not DEBUG)
+# Expiración por inactividad: la sesión se renueva en cada petición autenticada (8 h).
+SESSION_COOKIE_AGE = env.int("SESSION_COOKIE_AGE_SEGUNDOS", default=8 * 60 * 60)
+SESSION_SAVE_EVERY_REQUEST = env.bool("SESSION_SAVE_EVERY_REQUEST", default=True)
+
+# HTTPS detrás de Caddy/nginx: el proxy envía X-Forwarded-Proto=https.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=not DEBUG)
+SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0 if DEBUG else 31536000)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool(
+    "SECURE_HSTS_INCLUDE_SUBDOMAINS", default=not DEBUG
+)
+SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -87,7 +114,8 @@ AUTHENTICATION_BACKENDS = [
 AXES_FAILURE_LIMIT = 5
 AXES_COOLOFF_TIME = timedelta(minutes=15)
 AXES_RESET_ON_SUCCESS = True
-AXES_LOCKOUT_PARAMETERS = ["ip_address", "username"]
+# Combinación: bloquea usuario+IP, no toda la IP de la clínica por un usuario.
+AXES_LOCKOUT_PARAMETERS = [["ip_address", "username"]]
 
 # 2FA TOTP (obligatorio para admin y doctor, plan §6)
 # Clave Fernet para cifrar los secretos TOTP. En producción debe venir de la variable de entorno.
@@ -266,6 +294,11 @@ EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = env("EMAIL_HOST", default="127.0.0.1")
 EMAIL_PORT = env.int("EMAIL_PORT", default=1025)
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
+# Alternativa a STARTTLS: algunos proveedores usan SSL directo en el puerto 465.
+# No se puede activar EMAIL_USE_TLS y EMAIL_USE_SSL a la vez.
+EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
+# Corta la petición si el servidor SMTP no responde (Gmail y proveedores externos).
+EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=15)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="LUNA-IA <no-reply@luna-ia.local>")

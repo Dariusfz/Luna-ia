@@ -30,12 +30,20 @@ class Autenticacion2FATests(TestCase):
             "/api/auth/login/", {"username": username, "password": PASSWORD}, format="json"
         )
 
-    def _configurar_y_confirmar(self, username):
-        """Recorre el primer ingreso: login -> configurar -> confirmar con un código real."""
+    def _configurar_y_confirmar(self, username, instante=None):
+        """Recorre el primer ingreso: login -> configurar -> confirmar con un código real.
+
+        La hora se fija (y se simula en el servidor) para que el código generado y su
+        verificación caigan siempre en el mismo paso TOTP de 30 s. Sin esto, el test
+        falla de forma intermitente cuando la confirmación cruza el límite del paso.
+        """
         self.assertEqual(self._login(username).json()["paso"], "configurar_2fa")
         secreto = self.api.post("/api/auth/2fa/configurar/").json()["secreto"]
-        codigo = pyotp.TOTP(secreto).now()
-        respuesta = self.api.post("/api/auth/2fa/confirmar/", {"codigo": codigo}, format="json")
+        if instante is None:
+            instante = time.time()
+        codigo = pyotp.TOTP(secreto).at(instante)
+        with patch("users.mfa._ahora", return_value=instante):
+            respuesta = self.api.post("/api/auth/2fa/confirmar/", {"codigo": codigo}, format="json")
         self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
         return secreto, respuesta.json()["codigos_recuperacion"]
 
@@ -138,11 +146,13 @@ class Autenticacion2FATests(TestCase):
 
     def test_codigo_del_mismo_paso_que_la_confirmacion_no_sirve_para_entrar(self):
         """El código usado para confirmar no puede volver a usarse en el mismo paso de 30 s."""
-        secreto, _ = self._configurar_y_confirmar("admin")
+        instante = time.time()
+        secreto, _ = self._configurar_y_confirmar("admin", instante=instante)
         self._cerrar_sesion()
         self._login("admin")
-        ahora_mismo = pyotp.TOTP(secreto).now()
-        respuesta = self.api.post("/api/auth/2fa/verificar/", {"codigo": ahora_mismo}, format="json")
+        codigo = pyotp.TOTP(secreto).at(instante)
+        with patch("users.mfa._ahora", return_value=instante):
+            respuesta = self.api.post("/api/auth/2fa/verificar/", {"codigo": codigo}, format="json")
         self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_codigo_de_recuperacion_es_de_un_solo_uso(self):

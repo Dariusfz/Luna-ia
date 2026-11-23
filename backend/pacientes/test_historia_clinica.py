@@ -23,6 +23,10 @@ class HistoriaClinicaBase(TestCase):
         self.recep.sedes.set([self.sede_a])
         self.doctor = Doctor.objects.create(tipo="contratado", nombres="Luis", apellidos="Mejía")
         self.doctor.sedes.set([self.sede_a, self.sede_b])
+        self.doctor_solo_b = Doctor.objects.create(
+            tipo="contratado", nombres="Solo", apellidos="Norte"
+        )
+        self.doctor_solo_b.sedes.set([self.sede_b])
         self.tipo = TipoTrabajo.objects.create(nombre="Limpieza")
         self.ana = Paciente.objects.create(
             direccion="Col. Centro", nombres="Ana", apellidos="López", sede_origen=self.sede_a
@@ -81,6 +85,15 @@ class HistoriaClinicaTests(HistoriaClinicaBase):
         )
         self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("paciente", respuesta.json())
+
+    def test_rechaza_doctor_que_no_pertenece_a_la_sede(self):
+        respuesta = self.api.post(
+            "/api/historias-clinicas/",
+            self.datos_historia(doctor=self.doctor_solo_b.pk),
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("doctor", respuesta.json())
 
     def test_rechaza_cita_de_otro_paciente(self):
         cita = Atencion.objects.create(
@@ -160,6 +173,20 @@ class OdontogramaTests(HistoriaClinicaBase):
         )
         self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("hallazgos", respuesta.json())
+
+    def test_rechaza_doctor_que_no_pertenece_a_la_sede(self):
+        respuesta = self.api.post(
+            "/api/odontogramas/",
+            {
+                "paciente": self.ana.pk,
+                "sede": self.sede_a.pk,
+                "doctor": self.doctor_solo_b.pk,
+                "hallazgos": [{"diente": 16, "estado": "caries"}],
+            },
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("doctor", respuesta.json())
 
     def test_editar_reemplaza_hallazgos(self):
         respuesta = self.api.post(

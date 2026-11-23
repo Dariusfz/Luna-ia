@@ -153,14 +153,24 @@ class CitasHoyView(AnaliticaBase):
 
 
 class AtendidosMesView(AnaliticaBase):
-    """Atenciones completadas por día en un mes (`mes=AAAA-MM`, por defecto el actual)."""
+    """
+    Atenciones completadas por día.
+
+    Acepta un mes (`mes=AAAA-MM`) o un rango de fechas (`desde`/`hasta`, ISO). Con
+    `mes` devuelve el mes completo; con `desde`/`hasta` devuelve todos los días del
+    rango (máximo `MAX_DIAS_RANGO`). Sin parámetros usa el mes actual.
+    """
 
     consulta = "atendidos_mes"
 
     def get(self, request):
+        params = request.query_params
         try:
             sede_qs, sede = self._base(request)
-            inicio, fin = _mes(request.query_params)
+            if params.get("desde") or params.get("hasta"):
+                inicio, fin = _rango(params)
+            else:
+                inicio, fin = _mes(params)
         except ErrorFiltro as error:
             return self._error(error)
         completadas = sede_qs.filter(

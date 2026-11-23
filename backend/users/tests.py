@@ -1,5 +1,6 @@
 import re
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.core import mail
 from django.test import TestCase, override_settings
@@ -51,6 +52,17 @@ class InvitacionesTests(TestCase):
         self.assertEqual(mail.outbox[0].to, ["nueva@clinica.test"])
         # La respuesta nunca debe incluir el token
         self.assertNotIn("token", respuesta.json())
+
+    @patch("users.invitaciones.send_mail", side_effect=RuntimeError("SMTP caído"))
+    def test_si_el_correo_falla_no_deja_invitacion(self, _):
+        respuesta = self.client_admin.post(
+            "/api/invitaciones/",
+            {"email": "falla@clinica.test", "rol": "asistente", "sedes": [self.sede_a.pk]},
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Invitacion.objects.filter(email="falla@clinica.test").exists())
+        self.assertEqual(len(mail.outbox), 0)
 
     def test_no_admin_no_puede_invitar(self):
         respuesta = self.client_recep.post(

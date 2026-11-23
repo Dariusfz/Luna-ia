@@ -139,6 +139,17 @@ class AtendidosMesTests(AnaliticaBase):
         self.assertEqual(len(datos["datos"]), 31)
         self.assertEqual(datos["tipo_grafica"], "linea")
 
+    def test_rango_de_varios_meses_cubre_todos_los_dias(self):
+        self.crear(self.sede_a, date(2026, 3, 5), estado=Atencion.Estado.COMPLETADA)
+        self.crear(self.sede_a, date(2026, 4, 1), estado=Atencion.Estado.COMPLETADA)
+        datos = self.admin_api.get(
+            "/api/analitica/atendidos-mes/?desde=2026-03-01&hasta=2026-04-30"
+        ).json()
+        self.assertEqual(datos["total"], 2)
+        self.assertEqual(len(datos["datos"]), 61)
+        self.assertEqual(datos["filtros"]["desde"], "2026-03-01")
+        self.assertEqual(datos["filtros"]["hasta"], "2026-04-30")
+
 
 class PorServicioTests(AnaliticaBase):
     def test_una_cita_con_dos_trabajos_cuenta_en_ambos(self):

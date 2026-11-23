@@ -70,7 +70,7 @@ class PacienteSerializer(serializers.ModelSerializer):
 
 
 class _ValidacionClinicaMixin:
-    """Reglas comunes: paciente visible y sede permitida para el usuario."""
+    """Reglas comunes: paciente visible, sede permitida y doctor coherente."""
 
     def validate_paciente(self, paciente):
         request = self.context.get("request")
@@ -83,6 +83,20 @@ class _ValidacionClinicaMixin:
         if request and not puede_usar_sede(request.user, sede):
             raise serializers.ValidationError("No tienes acceso a esa sede.")
         return sede
+
+    def validate_doctor(self, doctor):
+        # En el odontograma el doctor es opcional.
+        if doctor is not None and not doctor.activo:
+            raise serializers.ValidationError("El doctor está inactivo.")
+        return doctor
+
+    @staticmethod
+    def _validar_doctor_en_sede(sede, doctor):
+        """Un doctor solo puede firmar registros de las sedes que tiene asignadas."""
+        if sede and doctor and not doctor.sedes.filter(pk=sede.pk).exists():
+            raise serializers.ValidationError(
+                {"doctor": "Este doctor no tiene asignada la sede seleccionada."}
+            )
 
 
 class HallazgoDentalSerializer(serializers.ModelSerializer):
@@ -139,7 +153,9 @@ class OdontogramaSerializer(_ValidacionClinicaMixin, serializers.ModelSerializer
     def validate(self, datos):
         paciente = datos.get("paciente") or getattr(self.instance, "paciente", None)
         sede = datos.get("sede") or getattr(self.instance, "sede", None)
+        doctor = datos.get("doctor") or getattr(self.instance, "doctor", None)
         historia = datos.get("historia") or getattr(self.instance, "historia", None)
+        self._validar_doctor_en_sede(sede, doctor)
         if historia is not None:
             if paciente and historia.paciente_id != paciente.pk:
                 raise serializers.ValidationError(
@@ -227,7 +243,9 @@ class HistoriaClinicaSerializer(_ValidacionClinicaMixin, serializers.ModelSerial
     def validate(self, datos):
         paciente = datos.get("paciente") or getattr(self.instance, "paciente", None)
         sede = datos.get("sede") or getattr(self.instance, "sede", None)
+        doctor = datos.get("doctor") or getattr(self.instance, "doctor", None)
         atencion = datos.get("atencion") or getattr(self.instance, "atencion", None)
+        self._validar_doctor_en_sede(sede, doctor)
         if atencion is not None:
             if paciente and atencion.paciente_id != paciente.pk:
                 raise serializers.ValidationError(
