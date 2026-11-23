@@ -3,6 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { Button, Card, Input, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd'
 import type { TableProps } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import FormPaciente from '../componentes/FormPaciente'
 import { ApiError } from '../api/cliente'
@@ -18,6 +19,7 @@ const TAMANO_PAGINA = 25
 
 export default function Pacientes() {
   const cliente = useQueryClient()
+  const navegar = useNavigate()
   const [pagina, setPagina] = useState(1)
   const [texto, setTexto] = useState('')
   const [q, setQ] = useState('')
@@ -99,6 +101,9 @@ export default function Pacientes() {
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => editar(p)}>
             Editar
+          </Button>
+          <Button size="small" onClick={() => navegar(`/historia-clinica?paciente=${p.id}`)}>
+            Historia
           </Button>
           {p.activo ? (
             <Popconfirm

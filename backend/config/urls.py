@@ -5,7 +5,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 
 from agenda.views import AtencionViewSet, JornadaExternaViewSet, ListaEsperaViewSet
-from pacientes.views import PacienteViewSet
+from pacientes.views import HistoriaClinicaViewSet, OdontogramaViewSet, PacienteViewSet
 from pagos.views import PagoDoctorViewSet, PagoViewSet, ResumenCajaView
 from sedes.views import FeriadoViewSet, HorarioSedeViewSet, LugarExternoViewSet, SedeViewSet
 from servicios.views import EspecialidadViewSet, TipoTrabajoViewSet
@@ -30,6 +30,8 @@ router.register("invitaciones", InvitacionViewSet, basename="invitacion")
 router.register("usuarios", UsuarioViewSet, basename="usuario")
 router.register("doctores", DoctorViewSet, basename="doctor")
 router.register("pacientes", PacienteViewSet, basename="paciente")
+router.register("historias-clinicas", HistoriaClinicaViewSet, basename="historia-clinica")
+router.register("odontogramas", OdontogramaViewSet, basename="odontograma")
 router.register("atenciones", AtencionViewSet, basename="atencion")
 router.register("lista-espera", ListaEsperaViewSet, basename="lista-espera")
 router.register("jornadas-externas", JornadaExternaViewSet, basename="jornada-externa")

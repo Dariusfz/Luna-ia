@@ -86,6 +86,11 @@ RESPUESTA_MANIPULACION = (
     "de la clínica."
 )
 
+RESPUESTA_MEDICA = (
+    "No puedo darle indicaciones médicas ni recetas. Si tiene dolor, sangrado o hinchazón, "
+    "acuda a la clínica o a urgencias. ¿Quiere que le ayude a agendar una cita?"
+)
+
 RESPUESTA_BLOQUEADA = (
     "No puedo compartir esa información. Si necesitas algo sobre tu cita, con gusto te ayudo."
 )
@@ -137,6 +142,33 @@ def detectar_emergencia(texto: str) -> bool:
 
 def es_manipulacion(texto: str) -> bool:
     return bool(MANIPULACION.search(texto or ""))
+
+
+# ---- consultas médicas ------------------------------------------------------
+# Preguntas de salud ("me duele una muela, ¿qué me tomo?") se responden con un texto
+# fijo: el agente no da consejos médicos ni debe avisar al administrador por ellas.
+# Si el mensaje además pide una cita, se deja pasar para que el flujo de agenda siga.
+CONSULTA_MEDICA = re.compile(
+    r"("
+    r"\b(duele|dolor|muela|muelas|diente|dientes|enc[ií]a|enc[ií]as|sangra|sangrado|"
+    r"hinchaz[oó]n|fiebre|infecci[oó]n|receta|medicamento|medicamentos|pastilla|"
+    r"ibuprofeno|acetaminof[eé]n|antibi[oó]tico|anestesia)\b"
+    r"|qu[eé]\s+me\s+(tomo|puedo\s+tomar)"
+    r")",
+    re.IGNORECASE,
+)
+
+INTENCION_CITA = re.compile(
+    r"\b(cita|citas|agendar|agenda|reservar|turno|atenderme|atenci[oó]n)\b",
+    re.IGNORECASE,
+)
+
+
+def es_consulta_medica(texto: str) -> bool:
+    """True si pide consejo médico y no está pidiendo una cita."""
+    return bool(CONSULTA_MEDICA.search(texto or "")) and not bool(
+        INTENCION_CITA.search(texto or "")
+    )
 
 
 # ---- revisión de la salida del modelo --------------------------------------

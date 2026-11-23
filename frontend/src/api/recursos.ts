@@ -81,6 +81,8 @@ export type DatosPaciente = {
 export const crearPaciente = (datos: DatosPaciente) =>
   api<Paciente>('/pacientes/', { method: 'POST', json: datos })
 
+export const obtenerPaciente = (id: number) => api<Paciente>(`/pacientes/${id}/`)
+
 export const actualizarPaciente = (id: number, datos: Partial<DatosPaciente>) =>
   api<Paciente>(`/pacientes/${id}/`, { method: 'PATCH', json: datos })
 

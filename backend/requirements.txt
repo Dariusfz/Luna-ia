@@ -14,3 +14,6 @@ tzdata>=2024.1
 django-axes>=7.0
 pyotp>=2.9
 cryptography>=43.0
+faster-whisper>=1.0
+# faster-whisper pasa metadata_errors a av.open; PyAV 19 ya no lo acepta.
+av>=11,<17

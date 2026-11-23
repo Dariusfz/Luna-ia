@@ -29,6 +29,7 @@ ProyectoFinal/
 ## Reglas de trabajo (obligatorias)
 
 1. **Seguir `docs/PLAN.md`** como fuente de verdad. Si algo contradice el plan, avisar antes de cambiarlo.
+   **Documentar cada cambio en `docs/PLAN.md` (sección 15) en el mismo turno en que se hace**, no después.
 2. **LLM siempre por variables de entorno.** Nunca hardcodear proveedor, URL ni API key.
    (`LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`)
 3. **Reglas de negocio y permisos viven en Django**, nunca en el prompt del LLM.

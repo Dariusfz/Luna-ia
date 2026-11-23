@@ -10,6 +10,7 @@ import Configuracion from './paginas/Configuracion'
 import ConfirmarRecuperacion from './paginas/ConfirmarRecuperacion'
 import Doctores from './paginas/Doctores'
 import Especialidades from './paginas/Especialidades'
+import HistoriaClinica from './paginas/HistoriaClinica'
 import Inicio from './paginas/Inicio'
 import ListaEspera from './paginas/ListaEspera'
 import Login from './paginas/Login'
@@ -30,6 +31,7 @@ export default function App() {
         <Route element={<LayoutPrincipal />}>
           <Route index element={<Inicio />} />
           <Route path="pacientes" element={<Pacientes />} />
+          <Route path="historia-clinica" element={<HistoriaClinica />} />
           <Route path="atenciones" element={<Atenciones />} />
           <Route path="lista-espera" element={<ListaEspera />} />
           <Route path="asistente" element={<Asistente />} />

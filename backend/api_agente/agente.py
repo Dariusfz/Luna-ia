@@ -8,9 +8,9 @@ import re
 
 from django.utils import timezone
 from .seguridad import (
-    RESPUESTA_BLOQUEADA, RESPUESTA_MANIPULACION, detectar_emergencia,
-    es_confirmacion_simple, es_manipulacion, es_negacion, mensaje_emergencia,
-    revisar_salida,
+    RESPUESTA_BLOQUEADA, RESPUESTA_MANIPULACION, RESPUESTA_MEDICA,
+    detectar_emergencia, es_confirmacion_simple, es_consulta_medica,
+    es_manipulacion, es_negacion, mensaje_emergencia, revisar_salida,
 )
 from sedes.models import Sede
 
@@ -119,6 +119,8 @@ def responder(conversacion: ConversacionWhatsApp) -> str:
     if detectar_emergencia(ultimo):
         telefonos = [s.telefono for s in Sede.objects.filter(activa=True) if s.telefono]
         return mensaje_emergencia(telefonos)
+    if es_consulta_medica(ultimo):
+        return RESPUESTA_MEDICA
     if es_manipulacion(ultimo):
         logger.warning("Posible manipulación en la conversación %s", conversacion.pk)
         return RESPUESTA_MANIPULACION

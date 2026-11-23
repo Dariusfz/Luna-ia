@@ -5,7 +5,7 @@ import httpx
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from . import evolution, tasks
+from . import evolution, tasks, transcripcion
 from .cifrado import cifrar, descifrar
 from .models import ConversacionWhatsApp, MensajeWhatsApp
 
@@ -200,7 +200,12 @@ class ProcesarMensajeTests(TestCase):
         self.assertEqual(descifrar(respuesta.contenido_cifrado), "Hola, ¿en qué te ayudo?")
 
     @patch("api_agente.evolution.enviar_texto", return_value="SENT1")
-    def test_audio_sin_transcripcion_pide_que_escriba(self, enviar):
+    @patch(
+        "api_agente.transcripcion.transcribir",
+        side_effect=transcripcion.TranscripcionError("modelo no disponible"),
+    )
+    @patch("api_agente.evolution.descargar_audio", return_value=(b"ogg", "audio/ogg"))
+    def test_audio_sin_transcripcion_pide_que_escriba(self, descargar, transcribir, enviar):
         tasks.procesar_audio(self.mensaje.pk)
         enviar.assert_called_once_with(TELEFONO, tasks.RESPUESTA_AUDIO_NO_DISPONIBLE)
 

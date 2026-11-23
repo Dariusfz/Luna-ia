@@ -191,6 +191,14 @@ CELERY_TASK_ROUTES = {
     "api_agente.tasks.procesar_audio": {"queue": "audio"},
 }
 
+# Transcripción de notas de voz con faster-whisper (plan §5.3). Todo por entorno.
+# `WHISPER_DEVICE=auto` usa la GPU si está disponible; `int8` funciona en CPU y GPU.
+WHISPER_MODEL = env("WHISPER_MODEL", default="small")
+WHISPER_DEVICE = env("WHISPER_DEVICE", default="auto")
+WHISPER_COMPUTE_TYPE = env("WHISPER_COMPUTE_TYPE", default="int8")
+WHISPER_LANGUAGE = env("WHISPER_LANGUAGE", default="es")
+WHISPER_BEAM_SIZE = env.int("WHISPER_BEAM_SIZE", default=5)
+
 # WhatsApp: Evolution API (plan §5.2). Solo por entorno.
 EVOLUTION_BASE_URL = env("EVOLUTION_BASE_URL", default="http://127.0.0.1:8080")
 EVOLUTION_API_KEY = env("EVOLUTION_API_KEY", default="")

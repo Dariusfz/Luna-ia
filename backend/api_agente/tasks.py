@@ -3,13 +3,13 @@ import logging
 import httpx
 from celery import shared_task
 
-from . import agente, evolution
+from . import agente, evolution, transcripcion
 from .cifrado import cifrar
 from .models import MensajeWhatsApp
 
 logger = logging.getLogger(__name__)
 
-# Respuesta fija mientras no hay transcripción de audio (paso 5, plan §5.3).
+# Se responde cuando la nota de voz no se puede descargar o no se entiende (plan §5.3).
 RESPUESTA_AUDIO_NO_DISPONIBLE = (
     "No pude escuchar tu nota de voz. ¿Me la puedes escribir por favor?"
 )
@@ -72,16 +72,39 @@ def procesar_texto(self, mensaje_id: int) -> None:
 )
 def procesar_audio(self, mensaje_id: int) -> None:
     """
-    Paso 5 (Whisper) aún no implementado. Mientras tanto aplica el fallback del plan
-    (§5.3): pedir al paciente que escriba.
+    Descarga la nota de voz, la transcribe con faster-whisper y la trata como un mensaje
+    de texto normal (plan §5.3). El audio no se guarda: solo el texto transcrito.
     """
     mensaje = MensajeWhatsApp.objects.select_related("conversacion").get(pk=mensaje_id)
-    if not mensaje.conversacion.agente_activo:
+    conversacion = mensaje.conversacion
+    if not conversacion.agente_activo:
         return
-    if not _ultimo_mensaje_es_del_paciente(mensaje.conversacion):
+    if not _ultimo_mensaje_es_del_paciente(conversacion):
         logger.info(
             "El mensaje %s ya no es el último de la conversación %s; se omite",
             mensaje.pk, mensaje.conversacion_id,
         )
         return
-    _responder(mensaje, RESPUESTA_AUDIO_NO_DISPONIBLE)
+
+    jid = f"{conversacion.telefono.lstrip('+')}@s.whatsapp.net"
+    # EvolutionError y httpx.HTTPError se reintentan (autoretry_for).
+    audio, mimetype = evolution.descargar_audio(mensaje.wa_message_id, jid)
+    try:
+        texto = (transcripcion.transcribir(audio, mimetype) or "").strip()
+    except transcripcion.TranscripcionError:
+        logger.exception("No se pudo transcribir el audio %s", mensaje.pk)
+        _responder(mensaje, RESPUESTA_AUDIO_NO_DISPONIBLE)
+        return
+
+    if not texto:
+        logger.info("El audio %s no tiene voz reconocible", mensaje.pk)
+        _responder(mensaje, RESPUESTA_AUDIO_NO_DISPONIBLE)
+        return
+
+    # El texto transcrito reemplaza el marcador "[audio]": así el historial y el LLM lo ven.
+    mensaje.contenido_cifrado = cifrar(texto)
+    mensaje.save(update_fields=["contenido_cifrado"])
+    logger.info("Audio %s transcrito (%d caracteres)", mensaje.pk, len(texto))
+
+    respuesta = agente.responder(conversacion)
+    _responder(mensaje, respuesta)

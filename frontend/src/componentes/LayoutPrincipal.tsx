@@ -8,6 +8,7 @@ import {
   LogoutOutlined,
   MedicineBoxOutlined,
   MenuOutlined,
+  ProfileOutlined,
   RobotOutlined,
   SettingOutlined,
   TagsOutlined,
@@ -30,6 +31,7 @@ const ALTURA_ENCABEZADO = 64
 const itemsBase: NonNullable<MenuProps['items']> = [
   { key: '/', icon: <HomeOutlined />, label: 'Inicio' },
   { key: '/pacientes', icon: <TeamOutlined />, label: 'Pacientes' },
+  { key: '/historia-clinica', icon: <ProfileOutlined />, label: 'Historia clínica' },
   { key: '/atenciones', icon: <CalendarOutlined />, label: 'Atenciones' },
   { key: '/lista-espera', icon: <HourglassOutlined />, label: 'Lista de espera' },
   { key: '/doctores', icon: <MedicineBoxOutlined />, label: 'Doctores' },
