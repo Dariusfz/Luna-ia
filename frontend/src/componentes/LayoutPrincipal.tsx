@@ -1,5 +1,6 @@
 import {
   BankOutlined,
+  BarChartOutlined,
   CalendarOutlined,
   ExperimentOutlined,
   HomeOutlined,
@@ -15,6 +16,7 @@ import {
   TeamOutlined,
   UserOutlined,
   WalletOutlined,
+  WhatsAppOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Avatar, Button, Dropdown, Grid, Layout, Menu, Space, Typography } from 'antd'
@@ -30,6 +32,7 @@ const ALTURA_ENCABEZADO = 64
 
 const itemsBase: NonNullable<MenuProps['items']> = [
   { key: '/', icon: <HomeOutlined />, label: 'Inicio' },
+  { key: '/metricas', icon: <BarChartOutlined />, label: 'Métricas' },
   { key: '/pacientes', icon: <TeamOutlined />, label: 'Pacientes' },
   { key: '/historia-clinica', icon: <ProfileOutlined />, label: 'Historia clínica' },
   { key: '/atenciones', icon: <CalendarOutlined />, label: 'Atenciones' },
@@ -46,6 +49,12 @@ const itemsAdmin: NonNullable<MenuProps['items']> = [
   { key: '/configuracion', icon: <SettingOutlined />, label: 'Configuración' },
   { key: '/personal', icon: <IdcardOutlined />, label: 'Personal' },
 ]
+
+const itemAgente: NonNullable<MenuProps['items']>[number] = {
+  key: '/agente',
+  icon: <WhatsAppOutlined />,
+  label: 'Agente WhatsApp',
+}
 
 
 export default function LayoutPrincipal() {
@@ -79,7 +88,12 @@ export default function LayoutPrincipal() {
   ]
 
   const iniciales = usuario ? `${usuario.nombres.charAt(0)}${usuario.apellidos.charAt(0)}` : ''
-  const itemsMenu = usuario?.es_admin ? [...itemsBase, ...itemsAdmin] : itemsBase
+  const puedeVerAgente = usuario?.es_admin || usuario?.rol === 'recepcionista'
+  const itemsMenu = [
+    ...itemsBase,
+    ...(puedeVerAgente ? [itemAgente] : []),
+    ...(usuario?.es_admin ? itemsAdmin : []),
+  ]
 
   const menuFlotante = movil && abierto
 

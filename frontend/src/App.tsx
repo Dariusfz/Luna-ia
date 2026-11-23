@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import LayoutPrincipal from './componentes/LayoutPrincipal'
 import RequiereSesion from './componentes/RequiereSesion'
 import AceptarInvitacion from './paginas/AceptarInvitacion'
+import AgenteWhatsApp from './paginas/AgenteWhatsApp'
 import Asistente from './paginas/Asistente'
 import Atenciones from './paginas/Atenciones'
 import Caja from './paginas/Caja'
@@ -14,6 +15,7 @@ import HistoriaClinica from './paginas/HistoriaClinica'
 import Inicio from './paginas/Inicio'
 import ListaEspera from './paginas/ListaEspera'
 import Login from './paginas/Login'
+import Metricas from './paginas/Metricas'
 import Pacientes from './paginas/Pacientes'
 import Personal from './paginas/Personal'
 import RecuperarContrasena from './paginas/RecuperarContrasena'
@@ -30,11 +32,13 @@ export default function App() {
       <Route element={<RequiereSesion />}>
         <Route element={<LayoutPrincipal />}>
           <Route index element={<Inicio />} />
+          <Route path="metricas" element={<Metricas />} />
           <Route path="pacientes" element={<Pacientes />} />
           <Route path="historia-clinica" element={<HistoriaClinica />} />
           <Route path="atenciones" element={<Atenciones />} />
           <Route path="lista-espera" element={<ListaEspera />} />
           <Route path="asistente" element={<Asistente />} />
+          <Route path="agente" element={<AgenteWhatsApp />} />
           <Route path="caja" element={<Caja />} />
           <Route path="personal" element={<Personal />} />
           <Route path="doctores" element={<Doctores />} />

@@ -154,7 +154,9 @@ referencia: [`infra/.env.example`](infra/.env.example). `DATABASE_URL` en
 | `REDIS_URL` | Redis para caché y Celery | `redis://127.0.0.1:6379/0` |
 | `FRONTEND_URL` | Enlaces de invitación/recuperación | `http://localhost:5173` |
 | `EMAIL_HOST` / `EMAIL_PORT` | SMTP saliente | Mailpit en `127.0.0.1:1025` |
-| `EMAIL_USE_TLS` | TLS del SMTP | `False` |
+| `EMAIL_USE_TLS` | STARTTLS del SMTP (puerto 587) | `False` |
+| `EMAIL_USE_SSL` | SSL directo del SMTP (puerto 465) | `False` |
+| `EMAIL_TIMEOUT` | Segundos de espera del SMTP | `15` |
 | `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` | Credenciales SMTP | vacío |
 | `DEFAULT_FROM_EMAIL` | Remitente de correos | `LUNA-IA <no-reply@luna-ia.local>` |
 | `TOTP_ENCRYPTION_KEY` | Clave Fernet para cifrar secretos TOTP | derivada de `DJANGO_SECRET_KEY` en dev |
@@ -162,6 +164,59 @@ referencia: [`infra/.env.example`](infra/.env.example). `DATABASE_URL` en
 | `LLM_BASE_URL` | Endpoint compatible-OpenAI | `http://127.0.0.1:11434/v1` |
 | `LLM_API_KEY` | Clave del proveedor LLM | vacío en dev |
 | `LLM_MODEL` | Modelo a usar | `qwen3:8b` |
+
+### Correo real (Gmail u otro SMTP)
+
+Mailpit solo **captura** correos en `http://127.0.0.1:8025`; no los entrega a Gmail ni a
+ninguna bandeja. Para que las invitaciones y la recuperación de contraseña lleguen de
+verdad, configura un SMTP en `backend/.env`. Ejemplo con Gmail (requiere verificación en
+dos pasos y una [contraseña de aplicación](https://myaccount.google.com/apppasswords)):
+
+```env
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_USE_SSL=False
+EMAIL_HOST_USER=tu.cuenta@gmail.com
+EMAIL_HOST_PASSWORD=abcd efgh ijkl mnop   # sin espacios
+DEFAULT_FROM_EMAIL="LUNA-IA <tu.cuenta@gmail.com>"
+FRONTEND_URL=http://localhost:5173
+```
+
+Comprobar el envío sin crear usuarios:
+
+```bash
+cd backend
+python manage.py probar_correo destino@gmail.com
+```
+
+`FRONTEND_URL` debe ser una dirección que el destinatario pueda abrir: `localhost`
+solo sirve si el correo se abre en la misma máquina. Para probar desde un teléfono usa
+la URL de ngrok/cloudflared del frontend. En producción, usa el SMTP del dominio de la
+clínica (o un proveedor transaccional como Resend/Brevo/SendGrid), no un Gmail personal;
+Gmail limita los envíos diarios.
+
+### Seguridad de sesión
+
+Con `DJANGO_DEBUG=False` se activan automáticamente cookies `Secure`, redirección a HTTPS
+y HSTS. La sesión expira por inactividad a las 8 horas. Si necesitas ajustarlo (demo sin
+TLS o un dominio distinto), usa en `backend/.env`:
+
+```env
+SESSION_COOKIE_SECURE=True
+CSRF_COOKIE_SECURE=True
+SESSION_COOKIE_AGE_SEGUNDOS=28800
+SESSION_SAVE_EVERY_REQUEST=True
+SECURE_SSL_REDIRECT=True
+SECURE_HSTS_SECONDS=31536000
+```
+
+Detrás de Caddy/nginx el backend confía en `X-Forwarded-Proto`; asegúrate de que el proxy
+lo envíe (Caddy lo hace por defecto).
+
+El login usa `django-axes`: tras 5 intentos fallidos para el mismo usuario desde la misma
+IP, la cuenta queda bloqueada 15 minutos y la API responde `429` con `Retry-After`. Un login
+correcto reinicia el contador y el bloqueo no afecta a los demás usuarios de la red.
 
 Para usar Ollama en local:
 
