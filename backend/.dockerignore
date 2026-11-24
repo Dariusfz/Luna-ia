@@ -1,0 +1,13 @@
+# Archivos que no deben entrar a la imagen de producción.
+.env
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+media
+staticfiles
+.git
+.gitignore

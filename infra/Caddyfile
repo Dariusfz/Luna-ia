@@ -1,0 +1,38 @@
+# Caddy actúa como origen del Cloudflare Tunnel: recibe HTTP desde cloudflared,
+# sirve el frontend compilado, los estáticos/media de Django y pasa /api y /admin
+# a Gunicorn. No publica puertos a internet; el túnel sale hacia Cloudflare.
+:80 {
+	encode gzip
+
+	# Django detrás del túnel ve X-Forwarded-Proto=https aunque Caddy reciba HTTP.
+	handle /api/* {
+		reverse_proxy backend:8000 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	handle /admin/* {
+		reverse_proxy backend:8000 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	# collectstatic deja los archivos en /app/staticfiles (volumen static_data).
+	handle_path /static/* {
+		root * /srv-static
+		file_server
+	}
+
+	# MEDIA_ROOT de Django (documentos, fotos).
+	handle_path /media/* {
+		root * /srv-media
+		file_server
+	}
+
+	# React (SPA): todo lo demás va a index.html.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

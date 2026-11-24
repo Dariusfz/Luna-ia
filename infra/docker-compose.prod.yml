@@ -1,0 +1,138 @@
+name: luna-ia-prod
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:?Define POSTGRES_DB en infra/.env}"
+      POSTGRES_USER: "${POSTGRES_USER:?Define POSTGRES_USER en infra/.env}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en infra/.env}"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../backend
+    env_file:
+      - ../backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - static_data:/app/staticfiles
+      - ../backend/media:/app/media
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../backend
+    command: celery -A config worker -Q default,audio --concurrency=1 -l info
+    env_file:
+      - ../backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend/media:/app/media
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:8088:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../frontend/dist:/srv:ro
+      - static_data:/srv-static:ro
+      - ../backend/media:/srv-media:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+  # Solo se inicia con: docker compose --profile tunnel up -d cloudflared
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:-}"
+    depends_on:
+      - caddy
+    profiles: ["tunnel"]
+    restart: unless-stopped
+
+  evolution-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: "${EVOLUTION_DB_PASSWORD:?Define EVOLUTION_DB_PASSWORD en infra/.env}"
+    volumes:
+      - evolution_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Solo acceso local: el manager/QR se abre por túnel SSH desde Windows.
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      SERVER_URL: "http://evolution-api:8080"
+      AUTHENTICATION_API_KEY: "${EVOLUTION_API_KEY:?Define EVOLUTION_API_KEY en infra/.env}"
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: "postgresql://evolution:${EVOLUTION_DB_PASSWORD}@evolution-postgres:5432/evolution?schema=public"
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: "redis://redis:6379/2"
+      CACHE_REDIS_PREFIX_KEY: "evolution"
+      CACHE_LOCAL_ENABLED: "false"
+      # Django corre como servicio `backend` dentro de la misma red de Docker.
+      WEBHOOK_GLOBAL_ENABLED: "true"
+      WEBHOOK_GLOBAL_URL: "http://backend:8000/api/agente/webhook/evolution/${EVOLUTION_WEBHOOK_SECRET:?Define EVOLUTION_WEBHOOK_SECRET en infra/.env}/"
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
+      WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
+      WEBSOCKET_ENABLED: "false"
+      LOG_LEVEL: "ERROR,WARN,INFO"
+    volumes:
+      - evolution_instances:/evolution/instances
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  static_data:
+  caddy_data:
+  caddy_config:
+  evolution_pg_data:
+  evolution_instances:
