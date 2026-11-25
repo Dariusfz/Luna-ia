@@ -37,6 +37,9 @@ from .seguridad import es_afirmativo
 logger = logging.getLogger(__name__)
 
 DURACION_CITA_MINUTOS = 20
+# Cuántos mensajes del paciente se miran para decidir el tratamiento. Un "brackets"
+# mencionado hace días no debe validar el id que manda el modelo hoy.
+VENTANA_TRATAMIENTO = 12
 EDAD_ADULTO = 18
 FORMATOS_NACIMIENTO = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y")
 
@@ -145,11 +148,24 @@ def _tratamiento_mencionado(textos, nombre: str) -> bool:
     dichas = re.findall(r"[a-zñ]+", _sin_acentos(" ".join(textos)))
     for palabra in palabras:
         for dicha in dichas:
-            if len(dicha) < 4:
+            # Solo palabras de 5+ letras: con 4, un "este" cualquiera activaba "estéticos".
+            if len(dicha) < 5:
                 continue
-            if palabra.startswith(dicha) or difflib.SequenceMatcher(None, palabra, dicha).ratio() >= 0.8:
+            if palabra.startswith(dicha) or dicha.startswith(palabra):
+                return True
+            if difflib.SequenceMatcher(None, palabra, dicha).ratio() >= 0.85:
                 return True
     return False
+
+
+def _coincide_busqueda(texto: str, nombre: str) -> bool:
+    """Filtro del catálogo por lo que escribe el paciente ('limp', 'extraccion'...).
+    Aquí sí vale cualquier prefijo, aunque tenga 4 letras: es una búsqueda, no una
+    validación de que el paciente haya pedido ese tratamiento."""
+    consulta = _sin_acentos(str(texto or "")).strip()
+    if consulta and consulta in _sin_acentos(nombre):
+        return True
+    return _tratamiento_mencionado([texto], nombre)
 
 
 class Herramientas:
@@ -342,7 +358,7 @@ class Herramientas:
         tratamientos = TipoTrabajo.objects.filter(activo=True).order_by("nombre")
         if texto:
             # Sin depender de tildes ni de la ortografía exacta ("extracción" -> "Extraccion").
-            tratamientos = [t for t in tratamientos if _tratamiento_mencionado([texto], t.nombre)]
+            tratamientos = [t for t in tratamientos if _coincide_busqueda(texto, t.nombre)]
         return [
             {
                 "tratamiento": t.nombre,
@@ -521,13 +537,14 @@ class Herramientas:
         # y luego el paciente solo eligió sede, día y hora. Se valida contra toda la
         # conversación para no perder ese dato; el más reciente tiene prioridad.
         textos = self._textos_paciente()
-        recientes = textos[-3:]
+        recientes = textos[-VENTANA_TRATAMIENTO:]
         tipo = TipoTrabajo.objects.filter(
             pk=self._entero(args.get("tipo_trabajo_id")), activo=True
         ).first()
-        if tipo is None or not _tratamiento_mencionado(textos, tipo.nombre):
-            # El modelo suele equivocar el id. Se usa el tratamiento que el paciente nombró.
-            tipo = self._tratamiento_nombrado(recientes) or self._tratamiento_nombrado(textos)
+        if tipo is None or not _tratamiento_mencionado(recientes, tipo.nombre):
+            # El modelo suele equivocar el id. Se usa el tratamiento que el paciente
+            # nombró hace poco (el más reciente tiene prioridad).
+            tipo = self._tratamiento_nombrado(recientes)
         if tipo is None:
             raise ErrorHerramienta(
                 "El paciente no ha nombrado un tratamiento del catálogo. Pregúntale qué tratamiento "
@@ -739,6 +756,9 @@ class Herramientas:
                     "cita_creada": True,
                     "fecha": cita_creada.fecha.isoformat(),
                     "hora": cita_creada.hora_inicio.strftime("%H:%M"),
+                    "tratamiento": cita_creada.tipo_trabajo.nombre,
+                    "sede": cita_creada.sede.nombre,
+                    "doctor": f"{cita_creada.doctor.nombres} {cita_creada.doctor.apellidos}",
                 }
             elif tipo == "cancelar_cita":
                 cita = self._cita_del_paciente(datos.get("cita_id"))
@@ -765,6 +785,9 @@ class Herramientas:
                     "cita_modificada": True,
                     "fecha": cita.fecha.isoformat(),
                     "hora": cita.hora_inicio.strftime("%H:%M"),
+                    "tratamiento": cita.tipo_trabajo.nombre,
+                    "sede": cita.sede.nombre,
+                    "doctor": f"{cita.doctor.nombres} {cita.doctor.apellidos}",
                 }
             else:
                 raise ErrorHerramienta("Acción pendiente desconocida.")

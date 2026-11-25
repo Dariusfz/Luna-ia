@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Form, Input, Modal, Select, message } from 'antd'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { ApiError } from '../api/cliente'
 import {
@@ -26,6 +26,8 @@ export default function FormPaciente({ abierto, paciente = null, onCerrar }: Pro
   const [form] = Form.useForm<DatosPaciente>()
   const cliente = useQueryClient()
   const editando = paciente !== null
+  const [modal, contextoModal] = Modal.useModal()
+  const enviados = useRef<DatosPaciente | null>(null)
 
   const { data: sedes } = useQuery({ queryKey: ['sedes', 'true'], queryFn: () => listarSedes('true') })
 
@@ -61,28 +63,48 @@ export default function FormPaciente({ abierto, paciente = null, onCerrar }: Pro
       onCerrar()
     },
     onError: (e) => {
-      if (e instanceof ApiError && Object.keys(e.campos).length > 0) {
-        // Marca cada campo con su error en lugar de mostrar un aviso genérico.
-        form.setFields(
-          Object.entries(e.campos).map(([nombre, error]) => ({ name: nombre as keyof DatosPaciente, errors: [error] })),
-        )
+      if (e instanceof ApiError) {
+        // El backend detectó un homónimo: se pide confirmación explícita antes de duplicar.
+        if (e.campos.duplicado) {
+          modal.confirm({
+            title: 'Posible paciente duplicado',
+            content: e.campos.duplicado,
+            okText: editando ? 'Es otra persona, guardar' : 'Es otra persona, registrar',
+            cancelText: 'Cancelar',
+            onOk: () => {
+              if (enviados.current) {
+                guardar.mutate({ ...enviados.current, confirmar_duplicado: true })
+              }
+            },
+          })
+          return
+        }
+        const campos = Object.entries(e.campos).filter(([nombre]) => nombre !== 'duplicado')
+        if (campos.length > 0) {
+          // Marca cada campo con su error en lugar de mostrar un aviso genérico.
+          form.setFields(
+            campos.map(([nombre, error]) => ({ name: nombre as keyof DatosPaciente, errors: [error] })),
+          )
+        }
       }
       message.error(e instanceof ApiError ? e.message : 'No se pudo guardar el paciente.')
     },
   })
 
   return (
-    <Modal
-      title={editando ? 'Editar paciente' : 'Nuevo paciente'}
-      open={abierto}
-      onCancel={onCerrar}
-      onOk={() => form.submit()}
-      okText="Guardar"
-      cancelText="Cancelar"
-      confirmLoading={guardar.isPending}
-      destroyOnHidden
-      width={640}
-    >
+    <>
+      {contextoModal}
+      <Modal
+        title={editando ? 'Editar paciente' : 'Nuevo paciente'}
+        open={abierto}
+        onCancel={onCerrar}
+        onOk={() => form.submit()}
+        okText="Guardar"
+        cancelText="Cancelar"
+        confirmLoading={guardar.isPending}
+        destroyOnHidden
+        width={640}
+      >
       {sedes && sedes.results.length === 0 && (
         <Alert
           type="warning"
@@ -96,13 +118,15 @@ export default function FormPaciente({ abierto, paciente = null, onCerrar }: Pro
         form={form}
         layout="vertical"
         requiredMark={false}
-        onFinish={(valores) =>
-          guardar.mutate({
+        onFinish={(valores) => {
+          const datos = {
             ...valores,
             fecha_nacimiento: valores.fecha_nacimiento || null,
             sexo: valores.sexo || null,
-          })
-        }
+          }
+          enviados.current = datos
+          guardar.mutate(datos)
+        }}
       >
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 16 }}>
           <Form.Item name="nombres" label="Nombres" rules={[{ required: true, message: 'Escribe los nombres' }]}>
@@ -180,6 +204,7 @@ export default function FormPaciente({ abierto, paciente = null, onCerrar }: Pro
           <Input.TextArea rows={2} />
         </Form.Item>
       </Form>
-    </Modal>
+      </Modal>
+    </>
   )
 }

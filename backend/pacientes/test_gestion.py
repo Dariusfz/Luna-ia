@@ -109,6 +109,95 @@ class GestionPacientesTests(TestCase):
         self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
 
 
+class DuplicadosPacienteTests(TestCase):
+    """Un paciente sin DNI ni teléfono no debe poder registrarse dos veces."""
+
+    def setUp(self):
+        org = Organizacion.objects.create(nombre="Clínica")
+        self.sede = Sede.objects.create(nombre="Centro", organizacion=org)
+        self.admin = Usuario.objects.create_user("admin", password="x-Clave-2026!", rol="admin")
+        self.api = APIClient()
+        self.api.force_login(self.admin)
+        self.existente = Paciente.objects.create(
+            direccion="Col. Centro",
+            nombres="Ana",
+            apellidos="López",
+            fecha_nacimiento=date(1990, 5, 10),
+            sede_origen=self.sede,
+        )
+
+    def _datos(self, **cambios):
+        datos = {
+            "nombres": "Ana",
+            "apellidos": "López",
+            "sede_origen": self.sede.pk,
+            "direccion": "Col. Centro",
+            "fecha_nacimiento": "1990-05-10",
+        }
+        datos.update(cambios)
+        return datos
+
+    def test_no_duplica_sin_dni_ni_telefono(self):
+        respuesta = self.api.post("/api/pacientes/", self._datos(), format="json")
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("duplicado", respuesta.json())
+        self.assertEqual(Paciente.objects.count(), 1)
+
+    def test_detecta_el_duplicado_aunque_cambien_tildes_y_mayusculas(self):
+        respuesta = self.api.post(
+            "/api/pacientes/",
+            self._datos(nombres="ANA", apellidos="LOPEZ"),
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Paciente.objects.count(), 1)
+
+    def test_sin_fecha_de_nacimiento_tambien_bloquea(self):
+        respuesta = self.api.post(
+            "/api/pacientes/",
+            self._datos(fecha_nacimiento=None),
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("duplicado", respuesta.json())
+
+    def test_permite_homonimo_si_el_admin_lo_confirma(self):
+        respuesta = self.api.post(
+            "/api/pacientes/",
+            self._datos(confirmar_duplicado=True),
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Paciente.objects.count(), 2)
+
+    def test_permite_homonimos_con_fechas_de_nacimiento_distintas(self):
+        respuesta = self.api.post(
+            "/api/pacientes/",
+            self._datos(fecha_nacimiento="1995-01-02"),
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+
+    def test_identidad_repetida_da_un_error_claro(self):
+        self.existente.identidad = "0801199012345"
+        self.existente.save()
+        respuesta = self.api.post(
+            "/api/pacientes/",
+            self._datos(nombres="Otra", apellidos="Persona", identidad="0801199012345"),
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("identidad", respuesta.json())
+
+    def test_editar_el_mismo_paciente_no_lo_marca_como_duplicado(self):
+        respuesta = self.api.patch(
+            f"/api/pacientes/{self.existente.pk}/",
+            {"nombres": "Ana", "apellidos": "López"},
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+
+
 class GestionPersonalTests(TestCase):
     def setUp(self):
         org = Organizacion.objects.create(nombre="Clínica")

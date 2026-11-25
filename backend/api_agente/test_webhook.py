@@ -66,6 +66,14 @@ class WebhookEvolutionTests(TestCase):
             respuesta = self.api.post(URL, evento(), format="json")
         self.assertEqual(respuesta.status_code, 404)
 
+    def test_evento_demasiado_grande_se_ignora_sin_romper_el_webhook(self):
+        # Evolution manda eventos de historial de varios MB; Django los rechazaría
+        # con 400 y reintentaría en bucle. Deben responderse con 200 y descartarse.
+        with override_settings(DATA_UPLOAD_MAX_MEMORY_SIZE=10):
+            respuesta = self.api.post(URL, evento(), format="json")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertFalse(MensajeWhatsApp.objects.exists())
+
     def test_texto_se_guarda_cifrado_y_se_encola_tras_confirmar(self):
         with self.captureOnCommitCallbacks(execute=True):
             respuesta = self.api.post(URL, evento("Quiero cita mañana"), format="json")

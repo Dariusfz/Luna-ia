@@ -1,6 +1,6 @@
 import { EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Card, Input, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Input, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd'
 import type { TableProps } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -29,6 +29,7 @@ export default function Personal() {
   const cliente = useQueryClient()
   const [invitarAbierto, setInvitarAbierto] = useState(false)
   const [editando, setEditando] = useState<UsuarioAdmin | null>(null)
+  const [aviso, setAviso] = useState<string | null>(null)
 
   const [texto, setTexto] = useState('')
   const [q, setQ] = useState('')
@@ -169,6 +170,18 @@ export default function Personal() {
         </Button>
       </Space>
 
+      {aviso && (
+        <Alert
+          type="success"
+          showIcon
+          closable
+          style={{ marginBottom: 16 }}
+          message={`Invitación enviada a ${aviso}`}
+          description="La persona recibirá un correo con el enlace para crear su cuenta. Si no llega en unos minutos, revisa la carpeta de spam."
+          onClose={() => setAviso(null)}
+        />
+      )}
+
       <Space wrap style={{ margin: '16px 0' }}>
         <Input
           allowClear
@@ -198,7 +211,7 @@ export default function Personal() {
         />
       </Space>
 
-      <FormInvitacion abierto={invitarAbierto} onCerrar={() => setInvitarAbierto(false)} />
+      <FormInvitacion abierto={invitarAbierto} onCerrar={() => setInvitarAbierto(false)} onEnviada={setAviso} />
       <FormUsuario usuario={editando} onCerrar={() => setEditando(null)} />
       <Table<UsuarioAdmin>
         rowKey="id"

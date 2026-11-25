@@ -121,6 +121,8 @@ services:
       # Django corre como servicio `backend` dentro de la misma red de Docker.
       WEBHOOK_GLOBAL_ENABLED: "true"
       WEBHOOK_GLOBAL_URL: "http://backend:8000/api/agente/webhook/evolution/${EVOLUTION_WEBHOOK_SECRET:?Define EVOLUTION_WEBHOOK_SECRET en infra/.env}/"
+      # Con "true" Evolution añade /nombre-del-evento a la URL y nuestro webhook da 404;
+      # se deja "false" y el backend descarta por tamaño los eventos de historial.
       WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
       WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
       WEBSOCKET_ENABLED: "false"

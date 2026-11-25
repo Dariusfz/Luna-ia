@@ -76,6 +76,8 @@ export type DatosPaciente = {
   medicamentos_actuales?: string
   observaciones?: string
   activo?: boolean
+  /** El admin confirma que un paciente con el mismo nombre es otra persona. */
+  confirmar_duplicado?: boolean
 }
 
 export const crearPaciente = (datos: DatosPaciente) =>

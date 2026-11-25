@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Form, Input, Modal, Select, Typography, message } from 'antd'
+import { Alert, App as AppAntd, Form, Input, Modal, Select, Typography } from 'antd'
+import { useState } from 'react'
 
 import { listarSedes } from '../api/recursos'
 import { ApiError } from '../api/cliente'
@@ -8,6 +9,8 @@ import { invitarPersonal, type DatosInvitacion } from '../api/usuarios'
 type Props = {
   abierto: boolean
   onCerrar: () => void
+  /** Se llama al enviar la invitación, para mostrar el acuse en la página. */
+  onEnviada: (email: string) => void
 }
 
 const roles = [
@@ -18,32 +21,55 @@ const roles = [
 ]
 
 /** Invita a una persona por correo. Ella crea su contraseña y configura el 2FA. */
-export default function FormInvitacion({ abierto, onCerrar }: Props) {
+export default function FormInvitacion({ abierto, onCerrar, onEnviada }: Props) {
   const [form] = Form.useForm<DatosInvitacion>()
   const cliente = useQueryClient()
   const rol = Form.useWatch('rol', form)
+  const [error, setError] = useState<string | null>(null)
+  const { message } = AppAntd.useApp()
 
   const { data: sedes } = useQuery({ queryKey: ['sedes', 'true'], queryFn: () => listarSedes('true') })
 
   const invitar = useMutation({
     mutationFn: invitarPersonal,
     onSuccess: (respuesta) => {
+      setError(null)
       message.success(`Invitación enviada a ${respuesta.email}`)
+      onEnviada(respuesta.email)
       cliente.invalidateQueries({ queryKey: ['usuarios'] })
       form.resetFields()
       onCerrar()
     },
     onError: (e) => {
-      message.error(e instanceof ApiError ? e.message : 'No se pudo enviar la invitación.')
+      const texto = e instanceof ApiError ? e.message : 'No se pudo enviar la invitación.'
+      // El motivo se muestra también bajo el campo que lo provocó (correo, rol o sedes).
+      if (e instanceof ApiError) {
+        form.setFields(
+          Object.entries(e.campos).map(([campo, mensaje]) => ({
+            name: campo as keyof DatosInvitacion,
+            errors: [mensaje],
+          })),
+        )
+      }
+      setError(texto)
+      message.error(texto)
     },
   })
+
+  function cerrar() {
+    setError(null)
+    onCerrar()
+  }
 
   return (
     <Modal
       title="Invitar personal"
       open={abierto}
-      onCancel={onCerrar}
-      onOk={() => form.submit()}
+      onCancel={cerrar}
+      onOk={() => {
+        setError(null)
+        form.submit()
+      }}
       okText="Enviar invitación"
       cancelText="Cancelar"
       confirmLoading={invitar.isPending}
@@ -52,6 +78,7 @@ export default function FormInvitacion({ abierto, onCerrar }: Props) {
       <Typography.Paragraph type="secondary">
         La persona recibirá un enlace por correo para crear su cuenta. El enlace vence en 72 horas.
       </Typography.Paragraph>
+      {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
       <Form<DatosInvitacion>
         form={form}
         layout="vertical"

@@ -1,4 +1,5 @@
 from datetime import date
+import unicodedata
 
 from django.db import transaction
 from rest_framework import serializers
@@ -10,7 +11,33 @@ from .models import HallazgoDental, HistoriaClinica, Odontograma, Paciente
 from .querysets import pacientes_visibles
 
 
+def _texto_normalizado(valor) -> str:
+    """Minúsculas, sin tildes y con espacios simples: 'José  PÉREZ' == 'jose perez'."""
+    base = unicodedata.normalize("NFKD", str(valor or ""))
+    plano = "".join(c for c in base if not unicodedata.combining(c))
+    return " ".join(plano.casefold().split())
+
+
+def _describir_paciente(paciente) -> str:
+    """Datos mínimos para que el admin reconozca al paciente que ya existe."""
+    partes = [f"{paciente.nombres} {paciente.apellidos} (#{paciente.pk})"]
+    if paciente.fecha_nacimiento:
+        partes.append(f"nac. {paciente.fecha_nacimiento.strftime('%d/%m/%Y')}")
+    if paciente.identidad:
+        partes.append(f"identidad {paciente.identidad}")
+    if paciente.telefono:
+        partes.append(f"tel. {paciente.telefono}")
+    if paciente.sede_origen_id:
+        partes.append(f"sede {paciente.sede_origen.nombre}")
+    if not paciente.activo:
+        partes.append("inactivo")
+    return ", ".join(partes)
+
+
 class PacienteSerializer(serializers.ModelSerializer):
+    # Escape explícito: el admin confirma que un homónimo es otra persona.
+    confirmar_duplicado = serializers.BooleanField(write_only=True, required=False, default=False)
+
     class Meta:
         model = Paciente
         fields = [
@@ -29,6 +56,7 @@ class PacienteSerializer(serializers.ModelSerializer):
             "medicamentos_actuales",
             "observaciones",
             "activo",
+            "confirmar_duplicado",
             "creado",
             "actualizado",
         ]
@@ -67,6 +95,72 @@ class PacienteSerializer(serializers.ModelSerializer):
         if sede is not None and not puede_usar_sede(request.user, sede):
             raise serializers.ValidationError("No tienes acceso a esa sede.")
         return sede
+
+    def validate(self, datos):
+        """Evita registrar dos veces al mismo paciente aunque no tenga DNI ni teléfono.
+
+        El nombre completo normalizado es la única señal que queda cuando faltan ambos.
+        Si dos homónimos tienen fechas de nacimiento distintas se permiten; para el resto
+        de casos el admin debe confirmar explícitamente con `confirmar_duplicado`.
+        """
+        confirmar = bool(datos.pop("confirmar_duplicado", False))
+
+        identidad = str(
+            datos.get("identidad", getattr(self.instance, "identidad", "")) or ""
+        ).strip()
+        if identidad:
+            otros = Paciente.objects.filter(identidad=identidad)
+            if self.instance is not None:
+                otros = otros.exclude(pk=self.instance.pk)
+            existente = otros.first()
+            if existente is not None:
+                raise serializers.ValidationError(
+                    {
+                        "identidad": (
+                            "Esa identidad ya está registrada para "
+                            f"{existente.nombres} {existente.apellidos}."
+                        )
+                    }
+                )
+
+        # En edición solo se revisa si cambian el nombre o la fecha de nacimiento.
+        campos_clave = {"nombres", "apellidos", "fecha_nacimiento"}
+        if self.instance is not None and not (campos_clave & set(datos)):
+            return datos
+        if confirmar:
+            return datos
+
+        nombres = _texto_normalizado(datos.get("nombres", getattr(self.instance, "nombres", "")))
+        apellidos = _texto_normalizado(
+            datos.get("apellidos", getattr(self.instance, "apellidos", ""))
+        )
+        nacimiento = datos.get(
+            "fecha_nacimiento", getattr(self.instance, "fecha_nacimiento", None)
+        )
+        if not nombres or not apellidos:
+            return datos
+
+        otros = Paciente.objects.select_related("sede_origen").all()
+        if self.instance is not None:
+            otros = otros.exclude(pk=self.instance.pk)
+        for paciente in otros:
+            if _texto_normalizado(paciente.nombres) != nombres:
+                continue
+            if _texto_normalizado(paciente.apellidos) != apellidos:
+                continue
+            # Dos homónimos con fechas de nacimiento distintas son personas distintas.
+            if nacimiento and paciente.fecha_nacimiento and nacimiento != paciente.fecha_nacimiento:
+                continue
+            raise serializers.ValidationError(
+                {
+                    "duplicado": (
+                        f"Ya existe un paciente con ese nombre: {_describir_paciente(paciente)}. "
+                        "Búscalo en la lista para atenderlo; si de verdad es otra persona, "
+                        "confirma que es un homónimo para registrarlo igual."
+                    )
+                }
+            )
+        return datos
 
 
 class _ValidacionClinicaMixin:

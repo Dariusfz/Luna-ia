@@ -71,6 +71,16 @@ class WebhookEvolutionView(APIView):
         if not esperado or not hmac.compare_digest(secreto, esperado):
             return Response(status=status.HTTP_404_NOT_FOUND)  # no revelar que la ruta existe
 
+        # Evolution envía eventos de sincronización histórica que pueden superar
+        # DATA_UPLOAD_MAX_MEMORY_SIZE (2,5 MB por defecto) y Django los rechaza con
+        # 400 antes de llegar aquí, haciendo que Evolution reintente en bucle.
+        # Solo interesan los mensajes, así que un cuerpo enorme se descarta con 200.
+        limite = getattr(settings, "DATA_UPLOAD_MAX_MEMORY_SIZE", 2_621_440)
+        largo = int(request.META.get("CONTENT_LENGTH") or 0)
+        if largo > limite:
+            logger.info("Webhook de Evolution ignorado por tamaño (%s bytes)", largo)
+            return Response(status=status.HTTP_200_OK)
+
         datos = request.data or {}
         evento = str(datos.get("event", "")).lower()
         if evento not in EVENTOS_MENSAJE:

@@ -231,14 +231,20 @@ def _mensaje_confirmado(borrador: dict, resultado: dict) -> str:
             return f"Listo, cancelé la cita de {detalle}. ¿Le ayudo con algo más?"
         return "Listo, la cita quedó cancelada. ¿Le ayudo con algo más?"
     if tipo == "modificar_cita":
+        detalle = f" de {resultado['tratamiento']}" if resultado.get("tratamiento") else ""
         return (
-            f"Listo, la cita quedó actualizada para el {resultado.get('fecha')} "
+            f"Listo, su cita{detalle} quedó actualizada para el {resultado.get('fecha')} "
             f"a las {resultado.get('hora')}. ¿Le ayudo con algo más?"
         )
     if tipo == "cita":
+        # El texto sale de lo que quedó guardado, no de lo que el modelo recuerda.
+        detalle = f" de {resultado['tratamiento']}" if resultado.get("tratamiento") else ""
+        lugar = ""
+        if resultado.get("doctor") and resultado.get("sede"):
+            lugar = f" con {resultado['doctor']} en {resultado['sede']}"
         return (
-            f"Listo, su cita quedó agendada para el {resultado.get('fecha')} "
-            f"a las {resultado.get('hora')}. ¿Le ayudo con algo más?"
+            f"Listo, su cita{detalle} quedó agendada para el {resultado.get('fecha')} "
+            f"a las {resultado.get('hora')}{lugar}. ¿Le ayudo con algo más?"
         )
     if tipo == "paciente":
         return "Listo, el registro quedó guardado. ¿Desea agendar la cita ahora?"

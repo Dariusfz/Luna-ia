@@ -162,6 +162,62 @@ class ModificarCitaTests(GestionDeCitasBase):
 
 
 class PrepararCitaTests(GestionDeCitasBase):
+    def test_palabras_cortas_no_activan_un_tratamiento_que_no_se_pidio(self):
+        # "este" (de "el que esté disponible") no debe activar "estéticos".
+        self.assertFalse(
+            herramientas._tratamiento_mencionado(
+                ["el que esté disponible"], "Colocación de brackets autoligados estéticos"
+            )
+        )
+        self.assertFalse(
+            herramientas._tratamiento_mencionado(["quiero una endodoncia"], "Control de ortodoncia")
+        )
+        # Los errores de escritura siguen tolerándose.
+        self.assertTrue(herramientas._tratamiento_mencionado(["quiero una estraccion"], "Extraccion"))
+
+    def test_una_mencion_vieja_no_valida_el_id_que_manda_el_modelo(self):
+        brackets = TipoTrabajo.objects.create(
+            nombre="Colocación de brackets superiores (Convencionales)", precio=3250
+        )
+        endodoncia = TipoTrabajo.objects.create(nombre="Endodoncia", precio=800)
+        self.mensaje("hola, quisiera brackets")
+        for relleno in (
+            "una consulta", "para mi hijo", "en San Pedro", "el lunes", "a las 8",
+            "por favor", "gracias", "bueno", "dale", "perfecto", "listo", "de acuerdo",
+        ):
+            self.mensaje(relleno)
+        self.mensaje("mejor quiero una endodoncia")
+
+        resultado = self.herramientas().preparar_cita({
+            "sede_id": self.sede.pk, "doctor_id": self.doctor.pk,
+            "tipo_trabajo_id": brackets.pk,
+            "fecha": (timezone.localdate() + timedelta(days=2)).isoformat(),
+            "hora_inicio": "08:30",
+        })
+
+        self.assertIn("Endodoncia", resultado["pendiente_confirmacion"])
+        self.conversacion.refresh_from_db()
+        self.assertEqual(self.conversacion.borrador["datos"]["tipo_trabajo"], endodoncia.pk)
+
+    def test_confirmacion_dice_el_tratamiento_que_se_guardo(self):
+        endodoncia = TipoTrabajo.objects.create(nombre="Endodoncia", precio=800)
+        self.mensaje("quiero una endodoncia")
+        self.herramientas().preparar_cita({
+            "sede_id": self.sede.pk, "doctor_id": self.doctor.pk,
+            "tipo_trabajo_id": endodoncia.pk,
+            "fecha": (timezone.localdate() + timedelta(days=2)).isoformat(),
+            "hora_inicio": "08:30",
+        })
+        self.mensaje("si")
+
+        with patch("api_agente.llm.chat") as chat:
+            respuesta = agente.responder(self.conversacion)
+
+        chat.assert_not_called()
+        self.assertIn("Endodoncia", respuesta)
+        self.assertIn(self.sede.nombre, respuesta)
+        self.assertIn("quedó agendada", respuesta)
+
     def test_usa_el_tratamiento_mencionado_al_inicio_del_flujo(self):
         extraccion = TipoTrabajo.objects.create(nombre="Extraccion", precio=800)
         self.mensaje("quiero una extraccion")

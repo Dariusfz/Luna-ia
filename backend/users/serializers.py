@@ -49,7 +49,9 @@ class InvitacionCrearSerializer(serializers.Serializer):
     def validate_email(self, value):
         email = value.lower()
         if get_user_model().objects.filter(email__iexact=email).exists():
-            raise serializers.ValidationError("Ya existe un usuario con este correo.")
+            raise serializers.ValidationError(
+                "Ya existe un usuario con este correo. Búscalo en la lista del personal o usa otro correo."
+            )
         return email
 
     def validate(self, data):
