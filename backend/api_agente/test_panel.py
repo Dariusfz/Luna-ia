@@ -181,6 +181,23 @@ class PausaTests(PanelBase):
         self.assertEqual(self.conversacion.telefono, "+50499999999")
 
 
+class EliminarTests(PanelBase):
+    def test_admin_elimina_conversacion_y_sus_mensajes(self):
+        pk = self.conversacion.pk
+        respuesta = self.api_admin.delete(url_detalle(pk))
+        self.assertEqual(respuesta.status_code, 204)
+        self.assertFalse(ConversacionWhatsApp.objects.filter(pk=pk).exists())
+        self.assertFalse(MensajeWhatsApp.objects.filter(conversacion_id=pk).exists())
+
+    def test_recepcionista_no_puede_eliminar(self):
+        respuesta = self.api_recep.delete(url_detalle(self.conversacion.pk))
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertTrue(ConversacionWhatsApp.objects.filter(pk=self.conversacion.pk).exists())
+
+    def test_conversacion_inexistente_devuelve_404(self):
+        self.assertEqual(self.api_admin.delete(url_detalle(999999)).status_code, 404)
+
+
 class ResumenTests(PanelBase):
     def test_cuenta_conversaciones_y_mensajes(self):
         datos = self.api_admin.get(URL_RESUMEN).json()

@@ -38,6 +38,7 @@ services:
     volumes:
       - static_data:/app/staticfiles
       - ../backend/media:/app/media
+      - ../backend/private_media:/app/private_media
     expose:
       - "8000"
     restart: unless-stopped

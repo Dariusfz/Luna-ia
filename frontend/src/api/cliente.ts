@@ -22,7 +22,7 @@ function camposDeError(datos: unknown): Record<string, string> {
   return salida
 }
 
-type Opciones = Omit<RequestInit, 'body'> & { json?: unknown }
+type Opciones = Omit<RequestInit, 'body'> & { json?: unknown; form?: FormData }
 
 function tokenCsrf(): string | undefined {
   const fila = document.cookie.split('; ').find((c) => c.startsWith('csrftoken='))
@@ -47,7 +47,7 @@ function mensajeDeError(datos: unknown): string {
  * La ruta es relativa a /api, por ejemplo api('/auth/me/').
  */
 export async function api<T>(ruta: string, opciones: Opciones = {}): Promise<T> {
-  const { json, ...resto } = opciones
+  const { json, form, ...resto } = opciones
   const headers = new Headers(resto.headers)
   const metodo = (resto.method ?? 'GET').toUpperCase()
 
@@ -55,6 +55,9 @@ export async function api<T>(ruta: string, opciones: Opciones = {}): Promise<T> 
   if (json !== undefined) {
     headers.set('Content-Type', 'application/json')
     body = JSON.stringify(json)
+  } else if (form !== undefined) {
+    // El navegador pone el Content-Type con el boundary del multipart.
+    body = form
   }
   if (!['GET', 'HEAD', 'OPTIONS'].includes(metodo)) {
     const token = tokenCsrf()

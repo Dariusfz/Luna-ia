@@ -287,6 +287,11 @@ LLM_USER_AGENT = env("LLM_USER_AGENT", default="LUNA-IA/1.0")
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Documentos clínicos (radiografías, fotos, consentimientos): se guardan fuera de
+# MEDIA_ROOT para que Caddy no los publique; solo se descargan por la API con permisos.
+PRIVATE_MEDIA_ROOT = env("PRIVATE_MEDIA_ROOT", default=str(BASE_DIR / "private_media"))
+DOCUMENTOS_TAMANO_MAXIMO_MB = env.int("DOCUMENTOS_TAMANO_MAXIMO_MB", default=20)
+
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 # Correo saliente. Por defecto apunta a Mailpit (solo captura, no entrega).
 # Para enviar a bandejas reales, definir EMAIL_HOST, EMAIL_PORT, EMAIL_USE_TLS,

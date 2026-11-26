@@ -108,14 +108,25 @@ class WebhookEvolutionTests(TestCase):
         self.assertFalse(MensajeWhatsApp.objects.filter(rol=MensajeWhatsApp.Rol.HUMANO).exists())
 
     def test_mensaje_escrito_desde_la_clinica_pausa_el_agente_en_ese_hilo(self):
+        conversacion = ConversacionWhatsApp.objects.create(telefono=TELEFONO)
         with self.captureOnCommitCallbacks(execute=True):
             self.api.post(URL, evento("Hola, soy Marta de la clínica", from_me=True, wa_id="HUM1"), format="json")
-        conversacion = ConversacionWhatsApp.objects.get(telefono=TELEFONO)
+        conversacion.refresh_from_db()
         self.assertFalse(conversacion.agente_activo)
-        mensaje = conversacion.mensajes.get(wa_message_id="HUM1")
-        self.assertEqual(mensaje.rol, MensajeWhatsApp.Rol.HUMANO)
-        self.assertEqual(descifrar(mensaje.contenido_cifrado), "Hola, soy Marta de la clínica")
+        # Con el agente desactivado no se guarda el mensaje en el hilo.
+        self.assertFalse(MensajeWhatsApp.objects.filter(wa_message_id="HUM1").exists())
         self.delay_texto.assert_not_called()
+
+    def test_mensaje_de_la_clinica_a_un_numero_nuevo_no_crea_conversacion(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.api.post(
+                URL,
+                evento("Hola, le escribo de la clínica", from_me=True, jid="50488887777@s.whatsapp.net", wa_id="HUM2"),
+                format="json",
+            )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertFalse(ConversacionWhatsApp.objects.exists())
+        self.assertFalse(MensajeWhatsApp.objects.exists())
 
     @override_settings(ADMIN_WHATSAPP="+50494165195")
     def test_el_numero_del_administrador_pausa_el_agente_al_escribir(self):
@@ -130,16 +141,17 @@ class WebhookEvolutionTests(TestCase):
         self.assertEqual(respuesta.status_code, 200)
         conversacion = ConversacionWhatsApp.objects.get(telefono=telefono_admin)
         self.assertFalse(conversacion.agente_activo)
-        mensaje = conversacion.mensajes.get(wa_message_id="ADM1")
-        self.assertEqual(mensaje.rol, MensajeWhatsApp.Rol.HUMANO)
+        # No se guarda el mensaje del administrador una vez desactivado el agente.
+        self.assertFalse(MensajeWhatsApp.objects.filter(wa_message_id="ADM1").exists())
         self.delay_texto.assert_not_called()
 
-    def test_con_el_hilo_pausado_el_paciente_se_guarda_sin_responder(self):
+    def test_con_el_hilo_pausado_no_se_guarda_nada(self):
         ConversacionWhatsApp.objects.create(telefono=TELEFONO, agente_activo=False)
         with self.captureOnCommitCallbacks(execute=True):
             respuesta = self.api.post(URL, evento("¿Me atienden hoy?", wa_id="PAC9"), format="json")
         self.assertEqual(respuesta.status_code, 200)
-        self.assertTrue(MensajeWhatsApp.objects.filter(wa_message_id="PAC9").exists())
+        self.assertFalse(MensajeWhatsApp.objects.filter(wa_message_id="PAC9").exists())
+        self.assertEqual(MensajeWhatsApp.objects.count(), 0)
         self.delay_texto.assert_not_called()
 
     def test_tarea_no_responde_si_una_persona_tomo_el_hilo_en_cola(self):

@@ -62,6 +62,8 @@ class AtencionViewSet(viewsets.ModelViewSet):
             qs = qs.filter(sede_id=int(params["sede"]))
         if params.get("doctor", "").isdigit():
             qs = qs.filter(doctor_id=int(params["doctor"]))
+        if params.get("paciente", "").isdigit():
+            qs = qs.filter(paciente_id=int(params["paciente"]))
         if params.get("desde"):
             qs = qs.filter(fecha__gte=params["desde"])
         if params.get("hasta"):

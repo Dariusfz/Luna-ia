@@ -6,10 +6,10 @@ import {
   SendOutlined,
   UserOutlined,
 } from '@ant-design/icons'
-import { Column, Line } from '@ant-design/plots'
+import { Column, Line, Pie, Scatter } from '@ant-design/plots'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Avatar, Button, Card, Col, Input, Popconfirm, Row, Space, Tag, Typography } from 'antd'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import {
@@ -35,6 +35,7 @@ const SUGERENCIAS: Sugerencia[] = [
   { texto: '¿Cuántos pacientes se atendieron este mes?', roles: ['doctor', 'recepcionista', 'asistente'] },
   { texto: '¿Qué tratamientos se piden más este mes?', roles: ['doctor', 'recepcionista'] },
   { texto: '¿A qué horas hay más citas?' },
+  { texto: 'Gráfico de pastel: citas por sede este mes' },
   { texto: '¿Qué sede tiene más citas este mes?', roles: ['recepcionista'] },
   { texto: '¿Cuánto dinero se ha cobrado este mes?', roles: ['admin'] },
 ]
@@ -61,19 +62,43 @@ const PALETA = [
 ]
 
 function GraficaResultado({ grafica }: { grafica: GraficaAnalitica }) {
-  if (grafica.total === 0) {
+  if (!grafica.datos.length || grafica.total === 0) {
     return <Typography.Text type="secondary">No hay datos para esta consulta.</Typography.Text>
+  }
+  if (grafica.tipo_grafica === 'pastel') {
+    return (
+      <Pie
+        data={grafica.datos}
+        angleField="valor"
+        colorField="etiqueta"
+        height={280}
+        innerRadius={0.55}
+        scale={{ color: { range: PALETA } }}
+        label={{ text: 'etiqueta', position: 'outside', transform: [{ type: 'overlapHide' }] }}
+        legend={{ color: { position: 'bottom' } }}
+      />
+    )
   }
   const base = {
     data: grafica.datos,
     xField: 'etiqueta',
     yField: 'valor',
-    height: 260,
+    height: 280,
     legend: false,
     axis: {
       x: { title: grafica.ejes.x },
       y: { title: grafica.ejes.y },
     },
+  }
+  if (grafica.tipo_grafica === 'puntos') {
+    return (
+      <Scatter
+        {...base}
+        colorField="etiqueta"
+        scale={{ color: { range: PALETA } }}
+        style={{ fillOpacity: 0.9 }}
+      />
+    )
   }
   if (grafica.tipo_grafica === 'linea') {
     return (
@@ -91,6 +116,90 @@ function GraficaResultado({ grafica }: { grafica: GraficaAnalitica }) {
       scale={{ color: { range: PALETA } }}
     />
   )
+}
+
+/** Negrita, cursiva y código en línea sin dependencias de Markdown. */
+function EnLinea({ texto }: { texto: string }) {
+  const partes = texto.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g).filter(Boolean)
+  return (
+    <>
+      {partes.map((parte, indice) => {
+        if (parte.startsWith('**') && parte.endsWith('**')) {
+          return <strong key={indice}>{parte.slice(2, -2)}</strong>
+        }
+        if (parte.startsWith('`') && parte.endsWith('`')) {
+          return (
+            <code key={indice} style={{ background: '#f0f0f0', borderRadius: 4, padding: '0 4px' }}>
+              {parte.slice(1, -1)}
+            </code>
+          )
+        }
+        if (parte.startsWith('*') && parte.endsWith('*')) {
+          return <em key={indice}>{parte.slice(1, -1)}</em>
+        }
+        return <span key={indice}>{parte}</span>
+      })}
+    </>
+  )
+}
+
+/** Texto del asistente con listas y negritas (el modelo responde en Markdown sencillo). */
+function TextoAsistente({ texto }: { texto: string }) {
+  const nodos: ReactNode[] = []
+  let items: ReactNode[] = []
+  let listaOrdenada = false
+
+  const cerrarLista = () => {
+    if (!items.length) return
+    const clase = { margin: '4px 0 6px 20px', padding: 0 }
+    nodos.push(
+      listaOrdenada ? (
+        <ol key={`lista-${nodos.length}`} style={clase}>{items}</ol>
+      ) : (
+        <ul key={`lista-${nodos.length}`} style={clase}>{items}</ul>
+      ),
+    )
+    items = []
+  }
+
+  texto.split(/\r?\n/).forEach((linea, indice) => {
+    const vineta = linea.match(/^\s*[-•]\s+(.*)$/)
+    const numero = linea.match(/^\s*\d+[.)]\s+(.*)$/)
+    if (vineta || numero) {
+      const ordenada = Boolean(numero)
+      if (items.length && ordenada !== listaOrdenada) cerrarLista()
+      listaOrdenada = ordenada
+      items.push(
+        <li key={`item-${indice}`} style={{ marginBottom: 2 }}>
+          <EnLinea texto={(vineta ?? numero)![1]} />
+        </li>,
+      )
+      return
+    }
+    cerrarLista()
+    const limpia = linea.replace(/^\s*-{3,}\s*$/, '')
+    if (!limpia.trim()) {
+      nodos.push(<div key={`espacio-${indice}`} style={{ height: 6 }} />)
+      return
+    }
+    const titulo = limpia.match(/^#{1,6}\s+(.*)$/)
+    if (titulo) {
+      nodos.push(
+        <div key={`titulo-${indice}`} style={{ margin: '6px 0 2px' }}>
+          <strong>{titulo[1]}</strong>
+        </div>,
+      )
+      return
+    }
+    nodos.push(
+      <div key={`linea-${indice}`} style={{ margin: '2px 0' }}>
+        <EnLinea texto={limpia} />
+      </div>,
+    )
+  })
+  cerrarLista()
+
+  return <div style={{ whiteSpace: 'normal', lineHeight: 1.6 }}>{nodos}</div>
 }
 
 function Burbuja({
@@ -113,10 +222,10 @@ function Burbuja({
           borderRadius: 12,
           background: esUsuario ? '#e6f4f3' : '#fafafa',
           border: '1px solid #f0f0f0',
-          whiteSpace: 'pre-wrap',
+          whiteSpace: esUsuario ? 'pre-wrap' : 'normal',
         }}
       >
-        <Typography.Text>{texto}</Typography.Text>
+        {esUsuario ? <Typography.Text>{texto}</Typography.Text> : <TextoAsistente texto={texto} />}
         {grafica && (
           <div style={{ marginTop: 12, minWidth: 320 }}>
             <Typography.Text strong>{grafica.titulo}</Typography.Text>
@@ -124,10 +233,14 @@ function Burbuja({
               <GraficaResultado grafica={grafica} />
             </div>
             <Space size={4} wrap style={{ marginTop: 4 }}>
-              <Tag>
-                {grafica.filtros.desde} a {grafica.filtros.hasta}
-              </Tag>
-              {grafica.filtros.sede !== null && <Tag color="processing">Sede filtrada</Tag>}
+              {(grafica.filtros.desde || grafica.filtros.hasta) && (
+                <Tag>
+                  {[grafica.filtros.desde, grafica.filtros.hasta].filter(Boolean).join(' a ')}
+                </Tag>
+              )}
+              {grafica.filtros.sede !== null && grafica.filtros.sede !== undefined && (
+                <Tag color="processing">Sede filtrada</Tag>
+              )}
             </Space>
           </div>
         )}

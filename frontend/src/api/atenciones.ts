@@ -46,6 +46,7 @@ export type Atencion = {
 export type FiltrosAtenciones = {
   sede?: number | null
   doctor?: number | null
+  paciente?: number | null
   estado?: EstadoAtencion | EstadoAtencion[] | null
   origen?: OrigenAtencion | null
   desde?: string
@@ -57,6 +58,7 @@ export const listarAtenciones = (pagina: number, f: FiltrosAtenciones) => {
   const params = new URLSearchParams({ page: String(pagina) })
   if (f.sede) params.set('sede', String(f.sede))
   if (f.doctor) params.set('doctor', String(f.doctor))
+  if (f.paciente) params.set('paciente', String(f.paciente))
   if (f.estado) {
     const estados = Array.isArray(f.estado) ? f.estado.join(',') : f.estado
     params.set('estado', estados)

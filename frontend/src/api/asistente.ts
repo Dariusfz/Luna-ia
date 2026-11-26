@@ -6,13 +6,15 @@ export interface PuntoGrafica {
 }
 
 /** Formato común de las consultas de /api/analitica/ (ver backend/analitica/views.py). */
+export type TipoGrafica = 'barras' | 'linea' | 'pastel' | 'puntos'
+
 export interface GraficaAnalitica {
   titulo: string
-  tipo_grafica: 'barras' | 'linea'
+  tipo_grafica: TipoGrafica
   ejes: { x: string; y: string }
   datos: PuntoGrafica[]
   total: number
-  filtros: { desde: string; hasta: string; sede: number | null }
+  filtros: { desde?: string; hasta?: string; sede?: number | null }
 }
 
 export interface RespuestaAsistente {

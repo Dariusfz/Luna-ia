@@ -5,6 +5,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 
 from agenda.views import AtencionViewSet, JornadaExternaViewSet, ListaEsperaViewSet
+from documentos.views import DocumentoViewSet
 from pacientes.views import HistoriaClinicaViewSet, OdontogramaViewSet, PacienteViewSet
 from pagos.views import PagoDoctorViewSet, PagoViewSet, ResumenCajaView
 from sedes.views import FeriadoViewSet, HorarioSedeViewSet, LugarExternoViewSet, SedeViewSet
@@ -43,6 +44,7 @@ router.register("feriados", FeriadoViewSet, basename="feriado")
 router.register("lugares-externos", LugarExternoViewSet, basename="lugar-externo")
 router.register("tipos-trabajo", TipoTrabajoViewSet, basename="tipo-trabajo")
 router.register("especialidades", EspecialidadViewSet, basename="especialidad")
+router.register("documentos", DocumentoViewSet, basename="documento")
 
 urlpatterns = [
     path("", RedirectView.as_view(url="/api/docs/", permanent=False)),

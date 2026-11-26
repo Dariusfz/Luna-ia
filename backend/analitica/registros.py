@@ -317,6 +317,7 @@ ENTIDADES: dict[str, Entidad] = {
         base=_base_atenciones,
         filtros={
             "mes": _filtro_mes("fecha"),
+            "fecha": _filtro_fecha("fecha", "exact", "Fecha exacta de la cita (AAAA-MM-DD)"),
             "fecha_desde": _filtro_fecha("fecha", "gte", "Fecha de la cita, desde"),
             "fecha_hasta": _filtro_fecha("fecha", "lte", "Fecha de la cita, hasta"),
             "estado": _filtro_opcion("estado", _opciones(Atencion.Estado.choices)),
@@ -342,6 +343,7 @@ ENTIDADES: dict[str, Entidad] = {
             "estado": ("estado", _mapa(_opciones(Atencion.Estado.choices))),
             "origen": ("origen", _mapa(_opciones(Atencion.Origen.choices))),
             "sede": ("sede__nombre", None),
+            "doctor": (("doctor__nombres", "doctor__apellidos"), None),
             "tratamiento": ("tipo_trabajo__nombre", None),
         },
         orden=("-fecha", "-hora_inicio"),
@@ -378,6 +380,7 @@ ENTIDADES: dict[str, Entidad] = {
         base=_base_pagos,
         filtros={
             "mes": _filtro_mes("fecha"),
+            "fecha": _filtro_fecha("fecha", "exact", "Fecha exacta del cobro (AAAA-MM-DD)"),
             "desde": _filtro_fecha("fecha", "gte", "Fecha del cobro, desde"),
             "hasta": _filtro_fecha("fecha", "lte", "Fecha del cobro, hasta"),
             "metodo": _filtro_opcion("metodo", _opciones(MetodoPago.choices)),
@@ -405,6 +408,7 @@ ENTIDADES: dict[str, Entidad] = {
         base=lambda usuario: PagoDoctor.objects.select_related("doctor", "atencion__paciente", "atencion__sede"),
         filtros={
             "mes": _filtro_mes("fecha"),
+            "fecha": _filtro_fecha("fecha", "exact", "Fecha exacta del pago (AAAA-MM-DD)"),
             "desde": _filtro_fecha("fecha", "gte", "Fecha del pago, desde"),
             "hasta": _filtro_fecha("fecha", "lte", "Fecha del pago, hasta"),
             "doctor": _filtro_nombre("doctor__nombres", "doctor__apellidos", ayuda="Nombre del doctor"),
@@ -434,6 +438,7 @@ ENTIDADES: dict[str, Entidad] = {
         base=lambda usuario: JornadaExterna.objects.select_related("doctor", "lugar", "tipo_trabajo"),
         filtros={
             "mes": _filtro_mes("fecha"),
+            "fecha": _filtro_fecha("fecha", "exact", "Fecha exacta de la jornada (AAAA-MM-DD)"),
             "desde": _filtro_fecha("fecha", "gte", "Fecha, desde"),
             "hasta": _filtro_fecha("fecha", "lte", "Fecha, hasta"),
             "doctor": _filtro_nombre("doctor__nombres", "doctor__apellidos", ayuda="Nombre del doctor"),
@@ -540,6 +545,14 @@ def definicion_herramienta(usuario) -> dict | None:
                     "limite": {
                         "type": "integer",
                         "description": f"Cuántos registros listar (1 a {LIMITE_MAXIMO}).",
+                    },
+                    "grafica": {
+                        "type": "string",
+                        "enum": ["barras", "pastel", "puntos", "linea"],
+                        "description": (
+                            "Solo si el usuario pidió una gráfica: tipo que quiere. "
+                            "Requiere agrupar_por para que haya datos que dibujar."
+                        ),
                     },
                 },
                 "required": ["entidad"],
@@ -650,22 +663,25 @@ def _ejecutar(usuario, argumentos) -> dict:
                 f"Opciones: {', '.join(entidad.agrupables)}.",
             )
         ruta, etiquetas = entidad.agrupables[agrupar]
+        # Algunos campos se agrupan por más de una columna (p. ej. nombre y apellido del doctor).
+        rutas = ruta if isinstance(ruta, (tuple, list)) else (ruta,)
         filas = (
             qs.order_by()
-            .values(ruta)
+            .values(*rutas)
             .annotate(cantidad=Count("pk", distinct=True))
             .order_by("-cantidad")
         )
         resultado["agrupado_por"] = agrupar
-        resultado["grupos"] = [
-            {
-                "valor": (
-                    etiquetas.get(fila[ruta], str(fila[ruta])) if etiquetas else (fila[ruta] or "Sin dato")
-                ),
-                "cantidad": fila["cantidad"],
-            }
-            for fila in filas
-        ]
+        grupos = []
+        for fila in filas:
+            if etiquetas:
+                valor = etiquetas.get(fila[rutas[0]], str(fila[rutas[0]]))
+            elif len(rutas) > 1:
+                valor = " ".join(str(fila[columna]) for columna in rutas if fila[columna]) or "Sin dato"
+            else:
+                valor = fila[rutas[0]] or "Sin dato"
+            grupos.append({"valor": valor, "cantidad": fila["cantidad"]})
+        resultado["grupos"] = grupos
         return resultado
 
     limite = _limite(argumentos.get("limite"))

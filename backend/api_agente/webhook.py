@@ -122,29 +122,36 @@ class WebhookEvolutionView(APIView):
         telefono = _telefono_desde_jid(jid)
         try:
             with transaction.atomic():
-                conversacion, _ = ConversacionWhatsApp.objects.get_or_create(telefono=telefono)
+                conversacion = ConversacionWhatsApp.objects.filter(telefono=telefono).first()
+
+                # Hilo con el agente desactivado: no se guarda nada hasta reactivarlo.
+                if conversacion is not None and not conversacion.agente_activo:
+                    return Response(status=status.HTTP_200_OK)
+
                 if from_me:
                     if MensajeWhatsApp.objects.filter(wa_message_id=wa_id).exists():
                         # Eco de una respuesta del propio agente: no es una intervención humana.
                         return Response(status=status.HTTP_200_OK)
-                    # Escribió una persona desde el WhatsApp de la clínica: el agente se calla en este hilo.
-                    if conversacion.agente_activo:
+                    # Escribió una persona desde el WhatsApp de la clínica: el agente se calla
+                    # en este hilo y tampoco se registra el mensaje.
+                    if conversacion is not None:
                         conversacion.agente_activo = False
                         conversacion.save(update_fields=["agente_activo", "ultima_actividad"])
-                    rol = MensajeWhatsApp.Rol.HUMANO
-                else:
-                    if _es_numero_admin(telefono):
-                        # El administrador escribió: el hilo pasa a atención humana.
-                        # Solo se reactiva manualmente desde el admin.
-                        if conversacion.agente_activo:
-                            conversacion.agente_activo = False
-                            conversacion.save(update_fields=["agente_activo", "ultima_actividad"])
-                        rol = MensajeWhatsApp.Rol.HUMANO
-                    else:
-                        rol = MensajeWhatsApp.Rol.PACIENTE
+                    return Response(status=status.HTTP_200_OK)
+
+                if _es_numero_admin(telefono):
+                    # El administrador escribió: el hilo pasa a atención humana y no se guarda.
+                    # Solo se reactiva manualmente desde el panel.
+                    if conversacion is not None:
+                        conversacion.agente_activo = False
+                        conversacion.save(update_fields=["agente_activo", "ultima_actividad"])
+                    return Response(status=status.HTTP_200_OK)
+
+                if conversacion is None:
+                    conversacion = ConversacionWhatsApp.objects.create(telefono=telefono)
                 registro = MensajeWhatsApp.objects.create(
                     conversacion=conversacion,
-                    rol=rol,
+                    rol=MensajeWhatsApp.Rol.PACIENTE,
                     tipo=tipo,
                     wa_message_id=wa_id,
                     contenido_cifrado=cifrar(texto or "[audio]"),
@@ -152,10 +159,6 @@ class WebhookEvolutionView(APIView):
         except IntegrityError:
             # Evolution reenvió el mismo evento: ya está guardado y en cola.
             logger.info("Mensaje WhatsApp duplicado ignorado: %s", wa_id)
-            return Response(status=status.HTTP_200_OK)
-
-        if from_me or not conversacion.agente_activo:
-            # Mensajes de personal o hilos atendidos por una persona: solo se guardan.
             return Response(status=status.HTTP_200_OK)
 
         tarea = procesar_audio if tipo == MensajeWhatsApp.Tipo.AUDIO else procesar_texto

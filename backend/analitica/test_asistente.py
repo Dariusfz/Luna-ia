@@ -1,4 +1,5 @@
-from datetime import time
+import json
+from datetime import time, timedelta
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -87,6 +88,123 @@ class AsistenteTests(AsistenteBase):
         self.assertEqual(datos["grafica"]["total"], 2)
         # La segunda llamada al LLM no puede volver a usar herramientas.
         self.assertEqual(chat.call_args_list[1].args[1], [])
+
+    @patch("analitica.asistente.llm.chat")
+    def test_ejecuta_todas_las_consultas_del_turno(self, chat):
+        manana = (timezone.localdate() + timedelta(days=1)).isoformat()
+        chat.side_effect = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    llamada("consultar_registros", json.dumps({
+                        "entidad": "atenciones", "filtros": {"fecha": manana}, "agrupar_por": "sede",
+                    }), "call_1"),
+                    llamada("consultar_registros", json.dumps({
+                        "entidad": "atenciones", "filtros": {"fecha": manana}, "agrupar_por": "doctor",
+                    }), "call_2"),
+                    llamada("consultar_registros", json.dumps({
+                        "entidad": "atenciones", "filtros": {"fecha": manana}, "limite": 50,
+                    }), "call_3"),
+                ],
+            },
+            {"role": "assistant", "content": "Mañana no hay citas agendadas."},
+        ]
+
+        datos = self.admin_api.post(
+            URL,
+            {"pregunta": "¿Cuántas citas hay mañana, en qué sedes y qué doctores atenderán?"},
+            format="json",
+        ).json()
+
+        self.assertEqual(datos["respuesta"], "Mañana no hay citas agendadas.")
+        mensajes = chat.call_args_list[1].args[0]
+        resultados = [json.loads(m["content"]) for m in mensajes if m["role"] == "tool"]
+        self.assertEqual(len(resultados), 3)
+        self.assertTrue(all("error" not in resultado for resultado in resultados))
+        self.assertEqual(resultados[0]["agrupado_por"], "sede")
+        self.assertEqual(resultados[1]["agrupado_por"], "doctor")
+
+    @patch("analitica.asistente.llm.chat")
+    def test_si_el_modelo_no_redacta_se_devuelven_los_datos(self, chat):
+        manana = (timezone.localdate() + timedelta(days=1)).isoformat()
+        chat.side_effect = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    llamada("consultar_registros", json.dumps({
+                        "entidad": "atenciones", "filtros": {"fecha": manana},
+                    }), "call_1"),
+                ],
+            },
+            {"role": "assistant", "content": ""},
+        ]
+        datos = self.admin_api.post(URL, {"pregunta": "citas de mañana"}, format="json").json()
+        self.assertIn("0 registro", datos["respuesta"])
+
+    @patch("analitica.asistente.llm.chat")
+    def test_arma_grafica_de_pastel_desde_los_registros(self, chat):
+        hoy = timezone.localdate().isoformat()
+        chat.side_effect = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    llamada("consultar_registros", json.dumps({
+                        "entidad": "atenciones",
+                        "filtros": {"fecha": hoy},
+                        "agrupar_por": "sede",
+                        "grafica": "pastel",
+                    }), "call_1"),
+                ],
+            },
+            {"role": "assistant", "content": "Aquí está la gráfica de pastel."},
+        ]
+        datos = self.admin_api.post(
+            URL, {"pregunta": "gráfico de pastel de las citas por sede"}, format="json"
+        ).json()
+
+        self.assertEqual(datos["grafica"]["tipo_grafica"], "pastel")
+        self.assertEqual(datos["grafica"]["total"], 2)
+        self.assertEqual(len(datos["grafica"]["datos"]), 2)
+        self.assertEqual(datos["grafica"]["titulo"], "Citas por Sede")
+        self.assertEqual(datos["grafica"]["ejes"]["y"], "Cantidad")
+
+    @patch("analitica.asistente.llm.chat")
+    def test_respeta_el_tipo_de_grafica_pedido_en_una_vista(self, chat):
+        chat.side_effect = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [llamada("citas_hoy", '{"grafica": "puntos"}')],
+            },
+            {"role": "assistant", "content": "Gráfico de puntos."},
+        ]
+        datos = self.admin_api.post(
+            URL, {"pregunta": "gráfico de puntos de las citas de hoy"}, format="json"
+        ).json()
+        self.assertEqual(datos["grafica"]["tipo_grafica"], "puntos")
+
+    @patch("analitica.asistente.llm.chat")
+    def test_registros_sin_grafica_pedida_no_dibuja(self, chat):
+        hoy = timezone.localdate().isoformat()
+        chat.side_effect = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    llamada("consultar_registros", json.dumps({
+                        "entidad": "atenciones",
+                        "filtros": {"fecha": hoy},
+                        "agrupar_por": "sede",
+                    }), "call_1"),
+                ],
+            },
+            {"role": "assistant", "content": "Hay 2 citas hoy."},
+        ]
+        datos = self.admin_api.post(URL, {"pregunta": "citas de hoy por sede"}, format="json").json()
+        self.assertIsNone(datos["grafica"])
 
     @patch("analitica.asistente.llm.chat")
     def test_respuesta_sin_herramienta_no_trae_grafica(self, chat):

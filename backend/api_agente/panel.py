@@ -18,7 +18,7 @@ from django.db.models import Count, OuterRef, Q, Subquery
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import serializers
-from rest_framework.generics import ListAPIView, RetrieveAPIView, UpdateAPIView
+from rest_framework.generics import ListAPIView, RetrieveDestroyAPIView, UpdateAPIView
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -47,6 +47,15 @@ class PuedeGestionarAgente(BasePermission):
             and usuario.is_authenticated
             and (es_admin(usuario) or usuario.rol == Usuario.Rol.RECEPCIONISTA)
         )
+
+
+class PuedeEliminarConversacion(BasePermission):
+    """Borrar un hilo y sus mensajes es destructivo: solo el administrador."""
+
+    message = "Solo el administrador puede eliminar conversaciones."
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and es_admin(request.user))
 
 
 def _conversaciones_visibles(usuario):
@@ -198,9 +207,14 @@ class ConversacionesPanelView(ListAPIView):
         return consulta.order_by("-ultima_actividad", "-pk")
 
 
-class ConversacionPanelDetalleView(RetrieveAPIView):
+class ConversacionPanelDetalleView(RetrieveDestroyAPIView):
     permission_classes = [PuedeGestionarAgente]
     serializer_class = DetalleConversacionPanelSerializer
+
+    def get_permissions(self):
+        if self.request.method == "DELETE":
+            return [PuedeEliminarConversacion()]
+        return [PuedeGestionarAgente()]
 
     def get_queryset(self):
         return _con_anotaciones(_conversaciones_visibles(self.request.user))

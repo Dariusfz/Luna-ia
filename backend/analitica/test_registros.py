@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, time, timedelta
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -196,6 +196,26 @@ class SeguridadYFormatoTests(RegistrosBase):
         )
         self.assertEqual(codigo, 200)
         self.assertEqual(datos["total"], 1)
+
+    def test_filtro_fecha_exacta_cuenta_solo_ese_dia(self):
+        hoy = timezone.localdate()
+        self.cita(self.doctor, self.carlos)
+        manana = self.cita(self.doctor, self.ana)
+        Atencion.objects.filter(pk=manana.pk).update(fecha=hoy + timedelta(days=1))
+        codigo, datos = self.ejecutar(
+            self.admin, {"entidad": "atenciones", "filtros": {"fecha": hoy.isoformat()}}
+        )
+        self.assertEqual(codigo, 200)
+        self.assertEqual(datos["total"], 1)
+
+    def test_agrupa_citas_por_doctor_con_nombre_completo(self):
+        self.cita(self.doctor, self.carlos)
+        self.cita(self.otro_doctor, self.ana)
+        codigo, datos = self.ejecutar(
+            self.admin, {"entidad": "atenciones", "agrupar_por": "doctor"}
+        )
+        self.assertEqual(codigo, 200)
+        self.assertEqual({grupo["valor"] for grupo in datos["grupos"]}, {"Ana Doc", "Luis Mejía"})
 
     def test_filtro_mes_cuenta_el_mes_completo(self):
         hoy = timezone.localdate()

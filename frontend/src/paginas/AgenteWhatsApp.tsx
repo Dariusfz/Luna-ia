@@ -1,4 +1,5 @@
 import {
+  DeleteOutlined,
   MessageOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
@@ -36,6 +37,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import {
   actualizarAgenteActivo,
+  eliminarConversacionAgente,
   listarConversacionesAgente,
   obtenerConversacionAgente,
   obtenerResumenAgente,
@@ -236,6 +238,17 @@ export default function AgenteWhatsApp() {
       message.error(e instanceof ApiError ? e.message : 'No se pudo cambiar el estado.'),
   })
 
+  const eliminar = useMutation({
+    mutationFn: eliminarConversacionAgente,
+    onSuccess: (_, id) => {
+      message.success('Conversación eliminada')
+      if (id === seleccionada) setSeleccionada(null)
+      cliente.invalidateQueries({ queryKey: ['agente'] })
+    },
+    onError: (e) =>
+      message.error(e instanceof ApiError ? e.message : 'No se pudo eliminar la conversación.'),
+  })
+
   const columnas: TableProps<ConversacionAgente>['columns'] = [
     {
       title: 'Teléfono',
@@ -312,6 +325,23 @@ export default function AgenteWhatsApp() {
             >
               Reactivar
             </Button>
+          )}
+          {usuario?.es_admin && (
+            <Popconfirm
+              title="¿Eliminar esta conversación?"
+              description="Se borran todos sus mensajes. No se puede recuperar."
+              okText="Eliminar"
+              cancelText="Cancelar"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => eliminar.mutate(conversacion.id)}
+            >
+              <Button
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                aria-label="Eliminar conversación"
+              />
+            </Popconfirm>
           )}
         </Space>
       ),

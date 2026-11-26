@@ -107,6 +107,9 @@ export function listarConversacionesAgente(
 export const obtenerConversacionAgente = (id: number) =>
   api<DetalleConversacionAgente>(`/agente/panel/conversaciones/${id}/`)
 
+export const eliminarConversacionAgente = (id: number) =>
+  api<void>(`/agente/panel/conversaciones/${id}/`, { method: 'DELETE' })
+
 export const actualizarAgenteActivo = (id: number, agenteActivo: boolean) =>
   api<{ id: number; agente_activo: boolean }>(
     `/agente/panel/conversaciones/${id}/actualizar/`,
